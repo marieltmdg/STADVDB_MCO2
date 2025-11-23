@@ -1,0 +1,77 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><%= movie.primaryTitle || 'Movie Details' %></h1>
+    <div>
+        <a href="/movies/<%= encodeURIComponent(movie.tconst) %>/edit" class="btn btn-warning">Edit</a>
+        <a href="/movies" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Movie Information</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row">
+                    <dt class="col-sm-3">ID:</dt>
+                    <dd class="col-sm-9"><code><%= movie.tconst %></code></dd>
+
+                    <dt class="col-sm-3">Type:</dt>
+                    <dd class="col-sm-9">
+                        <span class="badge bg-secondary"><%= movie.titleType || 'N/A' %></span>
+                    </dd>
+
+                    <dt class="col-sm-3">Primary Title:</dt>
+                    <dd class="col-sm-9"><strong><%= movie.primaryTitle || 'N/A' %></strong></dd>
+
+                    <dt class="col-sm-3">Original Title:</dt>
+                    <dd class="col-sm-9"><%= movie.originalTitle || 'N/A' %></dd>
+
+                    <dt class="col-sm-3">Adult Content:</dt>
+                    <dd class="col-sm-9">
+                        <span class="badge <%= movie.isAdult ? 'bg-warning' : 'bg-success' %>">
+                            <%= movie.isAdult ? 'Yes' : 'No' %>
+                        </span>
+                    </dd>
+
+                    <dt class="col-sm-3">Release Year:</dt>
+                    <dd class="col-sm-9"><%= movie.startYear || 'N/A' %></dd>
+
+                    <dt class="col-sm-3">End Year:</dt>
+                    <dd class="col-sm-9"><%= movie.endYear || 'N/A' %></dd>
+
+                    <dt class="col-sm-3">Runtime:</dt>
+                    <dd class="col-sm-9"><%= movie.runtimeMinutes ? movie.runtimeMinutes + ' minutes' : 'N/A' %></dd>
+
+                    <dt class="col-sm-3">Genres:</dt>
+                    <dd class="col-sm-9">
+                        <% if (movie.genres) { %>
+                            <% movie.genres.split(',').forEach(genre => { %>
+                                <span class="badge bg-info me-1"><%= genre.trim() %></span>
+                            <% }) %>
+                        <% } else { %>
+                            N/A
+                        <% } %>
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="/movies/<%= encodeURIComponent(movie.tconst) %>/edit" class="btn btn-warning">Edit Movie</a>
+                    <form method="POST" action="/movies/<%= encodeURIComponent(movie.tconst) %>?_method=DELETE">
+                        <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Are you sure you want to delete this movie?')">Delete Movie</button>
+                    </form>
+                    <a href="/movies" class="btn btn-secondary">Back to List</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,60 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Movies Database</h1>
+    <a href="/movies/new" class="btn btn-primary">Add New Movie</a>
+</div>
+
+<% if (movies && movies.length > 0) { %>
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>ID</th>
+                    <th>Type</th>
+                    <th>Title</th>
+                    <th>Original Title</th>
+                    <th>Year</th>
+                    <th>Runtime</th>
+                    <th>Genres</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% movies.forEach(movie => { %>
+                    <tr>
+                        <td><code><%= movie.tconst %></code></td>
+                        <td><span class="badge bg-secondary"><%= movie.titleType || 'N/A' %></span></td>
+                        <td><strong><%= movie.primaryTitle || 'N/A' %></strong></td>
+                        <td><%= movie.originalTitle || 'N/A' %></td>
+                        <td><%= movie.startYear || 'N/A' %><% if (movie.endYear) { %>-<%= movie.endYear %><% } %></td>
+                        <td><%= movie.runtimeMinutes ? movie.runtimeMinutes + ' min' : 'N/A' %></td>
+                        <td>
+                            <% if (movie.genres) { %>
+                                <% movie.genres.split(',').forEach(genre => { %>
+                                    <span class="badge bg-info me-1"><%= genre.trim() %></span>
+                                <% }) %>
+                            <% } else { %>
+                                N/A
+                            <% } %>
+                        </td>
+                        <td>
+                            <div class="btn-group" role="group">
+                                <a href="/movies/<%= encodeURIComponent(movie.tconst) %>" class="btn btn-sm btn-outline-primary">View</a>
+                                <a href="/movies/<%= encodeURIComponent(movie.tconst) %>/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
+                                <form method="POST" action="/movies/<%= encodeURIComponent(movie.tconst) %>?_method=DELETE" style="display: inline;">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this movie?')">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                <% }) %>
+            </tbody>
+        </table>
+    </div>
+<% } else { %>
+    <div class="alert alert-info" role="alert">
+        <h4 class="alert-heading">No movies found!</h4>
+        <p>Get started by adding your first movie to the database.</p>
+        <hr>
+        <a href="/movies/new" class="btn btn-primary">Add Your First Movie</a>
+    </div>
+<% } %>

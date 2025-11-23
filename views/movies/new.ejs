@@ -1,0 +1,106 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Add New Movie</h1>
+    <a href="/movies" class="btn btn-secondary">Back to List</a>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Movie Information</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="/movies">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="tconst" class="form-label">Movie ID (tconst)</label>
+                            <input type="text" class="form-control" id="tconst" name="tconst" 
+                                   placeholder="e.g., tt0123456" pattern="tt[0-9]+">
+                            <div class="form-text">Leave empty to auto-generate</div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="titleType" class="form-label">Title Type</label>
+                            <select class="form-select" id="titleType" name="titleType">
+                                <option value="">Select type...</option>
+                                <option value="movie">Movie</option>
+                                <option value="short">Short</option>
+                                <option value="tvSeries">TV Series</option>
+                                <option value="tvEpisode">TV Episode</option>
+                                <option value="tvMovie">TV Movie</option>
+                                <option value="tvSpecial">TV Special</option>
+                                <option value="tvMiniSeries">TV Mini Series</option>
+                                <option value="documentary">Documentary</option>
+                                <option value="video">Video</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="primaryTitle" class="form-label">Primary Title *</label>
+                            <input type="text" class="form-control" id="primaryTitle" name="primaryTitle" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="originalTitle" class="form-label">Original Title</label>
+                            <input type="text" class="form-control" id="originalTitle" name="originalTitle">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="startYear" class="form-label">Release Year</label>
+                            <input type="number" class="form-control" id="startYear" name="startYear" 
+                                   min="1880" max="2030" placeholder="e.g., 2023">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="endYear" class="form-label">End Year</label>
+                            <input type="number" class="form-control" id="endYear" name="endYear" 
+                                   min="1880" max="2030" placeholder="For TV series">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="runtimeMinutes" class="form-label">Runtime (minutes)</label>
+                            <input type="number" class="form-control" id="runtimeMinutes" name="runtimeMinutes" 
+                                   min="1" max="1000" placeholder="e.g., 120">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="genres" class="form-label">Genres</label>
+                        <input type="text" class="form-control" id="genres" name="genres" 
+                               placeholder="e.g., Action,Drama,Thriller (comma-separated)">
+                        <div class="form-text">Separate multiple genres with commas</div>
+                    </div>
+
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="isAdult" name="isAdult">
+                        <label class="form-check-label" for="isAdult">
+                            Adult content
+                        </label>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">Create Movie</button>
+                        <a href="/movies" class="btn btn-secondary">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Guidelines</h5>
+            </div>
+            <div class="card-body">
+                <h6>Required Fields:</h6>
+                <ul class="list-unstyled">
+                    <li>✓ Primary Title</li>
+                </ul>
+                <h6>ID Format:</h6>
+                <p class="small mb-2">Movie IDs should start with "tt" followed by digits (e.g., tt0123456)</p>
+                <h6>Genres:</h6>
+                <p class="small mb-0">Common genres: Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, Horror, Music, Mystery, Romance, Sci-Fi, Thriller, War, Western</p>
+            </div>
+        </div>
+    </div>
+</div>

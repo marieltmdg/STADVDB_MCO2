@@ -1,0 +1,130 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Edit Movie: <%= movie.primaryTitle || 'Untitled' %></h1>
+    <div>
+        <a href="/movies/<%= encodeURIComponent(movie.tconst) %>" class="btn btn-info">View</a>
+        <a href="/movies" class="btn btn-secondary">Back to List</a>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Edit Movie Information</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="/movies/<%= encodeURIComponent(movie.tconst) %>?_method=PUT">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="tconst" class="form-label">Movie ID (tconst)</label>
+                            <input type="text" class="form-control" id="tconst" name="tconst" 
+                                   value="<%= movie.tconst %>" readonly>
+                            <div class="form-text">ID cannot be changed</div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="titleType" class="form-label">Title Type</label>
+                            <select class="form-select" id="titleType" name="titleType">
+                                <option value="">Select type...</option>
+                                <option value="movie" <%= movie.titleType === 'movie' ? 'selected' : '' %>>Movie</option>
+                                <option value="short" <%= movie.titleType === 'short' ? 'selected' : '' %>>Short</option>
+                                <option value="tvSeries" <%= movie.titleType === 'tvSeries' ? 'selected' : '' %>>TV Series</option>
+                                <option value="tvEpisode" <%= movie.titleType === 'tvEpisode' ? 'selected' : '' %>>TV Episode</option>
+                                <option value="tvMovie" <%= movie.titleType === 'tvMovie' ? 'selected' : '' %>>TV Movie</option>
+                                <option value="tvSpecial" <%= movie.titleType === 'tvSpecial' ? 'selected' : '' %>>TV Special</option>
+                                <option value="tvMiniSeries" <%= movie.titleType === 'tvMiniSeries' ? 'selected' : '' %>>TV Mini Series</option>
+                                <option value="documentary" <%= movie.titleType === 'documentary' ? 'selected' : '' %>>Documentary</option>
+                                <option value="video" <%= movie.titleType === 'video' ? 'selected' : '' %>>Video</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="primaryTitle" class="form-label">Primary Title *</label>
+                            <input type="text" class="form-control" id="primaryTitle" name="primaryTitle" 
+                                   value="<%= movie.primaryTitle || '' %>" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="originalTitle" class="form-label">Original Title</label>
+                            <input type="text" class="form-control" id="originalTitle" name="originalTitle" 
+                                   value="<%= movie.originalTitle || '' %>">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="startYear" class="form-label">Release Year</label>
+                            <input type="number" class="form-control" id="startYear" name="startYear" 
+                                   value="<%= movie.startYear || '' %>" min="1880" max="2030">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="endYear" class="form-label">End Year</label>
+                            <input type="number" class="form-control" id="endYear" name="endYear" 
+                                   value="<%= movie.endYear || '' %>" min="1880" max="2030">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="runtimeMinutes" class="form-label">Runtime (minutes)</label>
+                            <input type="number" class="form-control" id="runtimeMinutes" name="runtimeMinutes" 
+                                   value="<%= movie.runtimeMinutes || '' %>" min="1" max="1000">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="genres" class="form-label">Genres</label>
+                        <input type="text" class="form-control" id="genres" name="genres" 
+                               value="<%= movie.genres || '' %>" placeholder="e.g., Action,Drama,Thriller">
+                        <div class="form-text">Separate multiple genres with commas</div>
+                    </div>
+
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="isAdult" name="isAdult" 
+                               <%= movie.isAdult ? 'checked' : '' %>>
+                        <label class="form-check-label" for="isAdult">
+                            Adult content
+                        </label>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">Update Movie</button>
+                        <a href="/movies/<%= encodeURIComponent(movie.tconst) %>" class="btn btn-info">Cancel</a>
+                        <a href="/movies" class="btn btn-secondary">Back to List</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Current Information</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row small">
+                    <dt class="col-4">ID:</dt>
+                    <dd class="col-8"><code><%= movie.tconst %></code></dd>
+                    <dt class="col-4">Type:</dt>
+                    <dd class="col-8"><%= movie.titleType || 'N/A' %></dd>
+                    <dt class="col-4">Year:</dt>
+                    <dd class="col-8"><%= movie.startYear || 'N/A' %></dd>
+                    <dt class="col-4">Runtime:</dt>
+                    <dd class="col-8"><%= movie.runtimeMinutes ? movie.runtimeMinutes + ' min' : 'N/A' %></dd>
+                    <dt class="col-4">Adult:</dt>
+                    <dd class="col-8"><%= movie.isAdult ? 'Yes' : 'No' %></dd>
+                </dl>
+            </div>
+        </div>
+        
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Danger Zone</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="/movies/<%= encodeURIComponent(movie.tconst) %>?_method=DELETE">
+                    <p class="small text-muted mb-2">This action cannot be undone.</p>
+                    <button type="submit" class="btn btn-danger btn-sm w-100" 
+                            onclick="return confirm('Are you sure you want to delete this movie?')">Delete Movie</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
