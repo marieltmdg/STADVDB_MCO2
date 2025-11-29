@@ -2,13 +2,29 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const moviesRoutes = require('./routes/movies');
+const Movie = require('./models/movie');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Initialize database connections
+Movie.initialize()
+  .then(() => console.log('[INFO] Database connections ready'))
+  .catch(err => {
+    console.error('[ERROR] Failed to initialize database:', err.message);
+    // Don't exit - let the server run anyway for testing
+  });
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('[INFO] Shutting down gracefully...');
+  await Movie.cleanup();
+  process.exit(0);
+});
+
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: 'http://localhost:10000' || 'http://localhost:3000',
   credentials: true
 }));
 app.use(express.json());
