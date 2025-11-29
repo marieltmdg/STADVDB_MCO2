@@ -6,6 +6,12 @@
     </div>
 </div>
 
+<% if (typeof error !== 'undefined' && error) { %>
+    <div class="alert alert-danger" role="alert">
+        <strong>Error:</strong> <%= error %>
+    </div>
+<% } %>
+
 <div class="row">
     <div class="col-md-8">
         <div class="card">
@@ -25,15 +31,18 @@
                             <label for="titleType" class="form-label">Title Type</label>
                             <select class="form-select" id="titleType" name="titleType">
                                 <option value="">Select type...</option>
-                                <option value="movie" <%= movie.titleType === 'movie' ? 'selected' : '' %>>Movie</option>
-                                <option value="short" <%= movie.titleType === 'short' ? 'selected' : '' %>>Short</option>
-                                <option value="tvSeries" <%= movie.titleType === 'tvSeries' ? 'selected' : '' %>>TV Series</option>
-                                <option value="tvEpisode" <%= movie.titleType === 'tvEpisode' ? 'selected' : '' %>>TV Episode</option>
-                                <option value="tvMovie" <%= movie.titleType === 'tvMovie' ? 'selected' : '' %>>TV Movie</option>
-                                <option value="tvSpecial" <%= movie.titleType === 'tvSpecial' ? 'selected' : '' %>>TV Special</option>
-                                <option value="tvMiniSeries" <%= movie.titleType === 'tvMiniSeries' ? 'selected' : '' %>>TV Mini Series</option>
-                                <option value="documentary" <%= movie.titleType === 'documentary' ? 'selected' : '' %>>Documentary</option>
-                                <option value="video" <%= movie.titleType === 'video' ? 'selected' : '' %>>Video</option>
+                                <% 
+                                const currentValue = typeof formData !== 'undefined' ? formData.titleType : movie.titleType;
+                                %>
+                                <option value="movie" <%= currentValue === 'movie' ? 'selected' : '' %>>Movie</option>
+                                <option value="short" <%= currentValue === 'short' ? 'selected' : '' %>>Short</option>
+                                <option value="tvSeries" <%= currentValue === 'tvSeries' ? 'selected' : '' %>>TV Series</option>
+                                <option value="tvEpisode" <%= currentValue === 'tvEpisode' ? 'selected' : '' %>>TV Episode</option>
+                                <option value="tvMovie" <%= currentValue === 'tvMovie' ? 'selected' : '' %>>TV Movie</option>
+                                <option value="tvSpecial" <%= currentValue === 'tvSpecial' ? 'selected' : '' %>>TV Special</option>
+                                <option value="tvMiniSeries" <%= currentValue === 'tvMiniSeries' ? 'selected' : '' %>>TV Mini Series</option>
+                                <option value="documentary" <%= currentValue === 'documentary' ? 'selected' : '' %>>Documentary</option>
+                                <option value="video" <%= currentValue === 'video' ? 'selected' : '' %>>Video</option>
                             </select>
                         </div>
                     </div>
@@ -42,12 +51,12 @@
                         <div class="col-md-6 mb-3">
                             <label for="primaryTitle" class="form-label">Primary Title *</label>
                             <input type="text" class="form-control" id="primaryTitle" name="primaryTitle" 
-                                   value="<%= movie.primaryTitle || '' %>" required>
+                                   value="<%= typeof formData !== 'undefined' ? formData.primaryTitle : movie.primaryTitle || '' %>" required>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label for="originalTitle" class="form-label">Original Title</label>
                             <input type="text" class="form-control" id="originalTitle" name="originalTitle" 
-                                   value="<%= movie.originalTitle || '' %>">
+                                   value="<%= typeof formData !== 'undefined' ? formData.originalTitle : movie.originalTitle || '' %>">
                         </div>
                     </div>
 
@@ -55,30 +64,30 @@
                         <div class="col-md-4 mb-3">
                             <label for="startYear" class="form-label">Release Year</label>
                             <input type="number" class="form-control" id="startYear" name="startYear" 
-                                   value="<%= movie.startYear || '' %>" min="1880" max="2030">
+                                   value="<%= typeof formData !== 'undefined' ? formData.startYear : movie.startYear || '' %>" min="1880" max="2030">
                         </div>
                         <div class="col-md-4 mb-3">
                             <label for="endYear" class="form-label">End Year</label>
                             <input type="number" class="form-control" id="endYear" name="endYear" 
-                                   value="<%= movie.endYear || '' %>" min="1880" max="2030">
+                                   value="<%= typeof formData !== 'undefined' ? formData.endYear : movie.endYear || '' %>" min="1880" max="2030">
                         </div>
                         <div class="col-md-4 mb-3">
                             <label for="runtimeMinutes" class="form-label">Runtime (minutes)</label>
                             <input type="number" class="form-control" id="runtimeMinutes" name="runtimeMinutes" 
-                                   value="<%= movie.runtimeMinutes || '' %>" min="1" max="1000">
+                                   value="<%= typeof formData !== 'undefined' ? formData.runtimeMinutes : movie.runtimeMinutes || '' %>" min="1" max="1000">
                         </div>
                     </div>
 
                     <div class="mb-3">
                         <label for="genres" class="form-label">Genres</label>
                         <input type="text" class="form-control" id="genres" name="genres" 
-                               value="<%= movie.genres || '' %>" placeholder="e.g., Action,Drama,Thriller">
+                               value="<%= typeof formData !== 'undefined' ? formData.genres : movie.genres || '' %>" placeholder="e.g., Action,Drama,Thriller">
                         <div class="form-text">Separate multiple genres with commas</div>
                     </div>
 
                     <div class="mb-3 form-check">
                         <input type="checkbox" class="form-check-input" id="isAdult" name="isAdult" 
-                               <%= movie.isAdult ? 'checked' : '' %>>
+                               <%= (typeof formData !== 'undefined' ? formData.isAdult : movie.isAdult) ? 'checked' : '' %>>
                         <label class="form-check-label" for="isAdult">
                             Adult content
                         </label>

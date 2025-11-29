@@ -3,6 +3,12 @@
     <a href="/movies" class="btn btn-secondary">Back to List</a>
 </div>
 
+<% if (typeof error !== 'undefined' && error) { %>
+    <div class="alert alert-danger" role="alert">
+        <strong>Error:</strong> <%= error %>
+    </div>
+<% } %>
+
 <div class="row">
     <div class="col-md-8">
         <div class="card">
@@ -15,6 +21,7 @@
                         <div class="col-md-6 mb-3">
                             <label for="tconst" class="form-label">Movie ID (tconst)</label>
                             <input type="text" class="form-control" id="tconst" name="tconst" 
+                                   value="<%= typeof formData !== 'undefined' ? formData.tconst || '' : '' %>"
                                    placeholder="e.g., tt0123456" pattern="tt[0-9]+">
                             <div class="form-text">Leave empty to auto-generate</div>
                         </div>
@@ -22,15 +29,15 @@
                             <label for="titleType" class="form-label">Title Type</label>
                             <select class="form-select" id="titleType" name="titleType">
                                 <option value="">Select type...</option>
-                                <option value="movie">Movie</option>
-                                <option value="short">Short</option>
-                                <option value="tvSeries">TV Series</option>
-                                <option value="tvEpisode">TV Episode</option>
-                                <option value="tvMovie">TV Movie</option>
-                                <option value="tvSpecial">TV Special</option>
-                                <option value="tvMiniSeries">TV Mini Series</option>
-                                <option value="documentary">Documentary</option>
-                                <option value="video">Video</option>
+                                <option value="movie" <%= typeof formData !== 'undefined' && formData.titleType === 'movie' ? 'selected' : '' %>>Movie</option>
+                                <option value="short" <%= typeof formData !== 'undefined' && formData.titleType === 'short' ? 'selected' : '' %>>Short</option>
+                                <option value="tvSeries" <%= typeof formData !== 'undefined' && formData.titleType === 'tvSeries' ? 'selected' : '' %>>TV Series</option>
+                                <option value="tvEpisode" <%= typeof formData !== 'undefined' && formData.titleType === 'tvEpisode' ? 'selected' : '' %>>TV Episode</option>
+                                <option value="tvMovie" <%= typeof formData !== 'undefined' && formData.titleType === 'tvMovie' ? 'selected' : '' %>>TV Movie</option>
+                                <option value="tvSpecial" <%= typeof formData !== 'undefined' && formData.titleType === 'tvSpecial' ? 'selected' : '' %>>TV Special</option>
+                                <option value="tvMiniSeries" <%= typeof formData !== 'undefined' && formData.titleType === 'tvMiniSeries' ? 'selected' : '' %>>TV Mini Series</option>
+                                <option value="documentary" <%= typeof formData !== 'undefined' && formData.titleType === 'documentary' ? 'selected' : '' %>>Documentary</option>
+                                <option value="video" <%= typeof formData !== 'undefined' && formData.titleType === 'video' ? 'selected' : '' %>>Video</option>
                             </select>
                         </div>
                     </div>
@@ -38,11 +45,13 @@
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label for="primaryTitle" class="form-label">Primary Title *</label>
-                            <input type="text" class="form-control" id="primaryTitle" name="primaryTitle" required>
+                            <input type="text" class="form-control" id="primaryTitle" name="primaryTitle" 
+                                   value="<%= typeof formData !== 'undefined' ? formData.primaryTitle || '' : '' %>" required>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label for="originalTitle" class="form-label">Original Title</label>
-                            <input type="text" class="form-control" id="originalTitle" name="originalTitle">
+                            <input type="text" class="form-control" id="originalTitle" name="originalTitle"
+                                   value="<%= typeof formData !== 'undefined' ? formData.originalTitle || '' : '' %>">
                         </div>
                     </div>
 
@@ -50,16 +59,19 @@
                         <div class="col-md-4 mb-3">
                             <label for="startYear" class="form-label">Release Year</label>
                             <input type="number" class="form-control" id="startYear" name="startYear" 
+                                   value="<%= typeof formData !== 'undefined' ? formData.startYear || '' : '' %>"
                                    min="1880" max="2030" placeholder="e.g., 2023">
                         </div>
                         <div class="col-md-4 mb-3">
                             <label for="endYear" class="form-label">End Year</label>
                             <input type="number" class="form-control" id="endYear" name="endYear" 
+                                   value="<%= typeof formData !== 'undefined' ? formData.endYear || '' : '' %>"
                                    min="1880" max="2030" placeholder="For TV series">
                         </div>
                         <div class="col-md-4 mb-3">
                             <label for="runtimeMinutes" class="form-label">Runtime (minutes)</label>
                             <input type="number" class="form-control" id="runtimeMinutes" name="runtimeMinutes" 
+                                   value="<%= typeof formData !== 'undefined' ? formData.runtimeMinutes || '' : '' %>"
                                    min="1" max="1000" placeholder="e.g., 120">
                         </div>
                     </div>
@@ -67,12 +79,14 @@
                     <div class="mb-3">
                         <label for="genres" class="form-label">Genres</label>
                         <input type="text" class="form-control" id="genres" name="genres" 
+                               value="<%= typeof formData !== 'undefined' ? formData.genres || '' : '' %>"
                                placeholder="e.g., Action,Drama,Thriller (comma-separated)">
                         <div class="form-text">Separate multiple genres with commas</div>
                     </div>
 
                     <div class="mb-3 form-check">
-                        <input type="checkbox" class="form-check-input" id="isAdult" name="isAdult">
+                        <input type="checkbox" class="form-check-input" id="isAdult" name="isAdult"
+                               <%= typeof formData !== 'undefined' && formData.isAdult ? 'checked' : '' %>>
                         <label class="form-check-label" for="isAdult">
                             Adult content
                         </label>

@@ -1,0 +1,24 @@
+<div class="text-center">
+    <div class="error-page">
+        <h1 class="display-4 text-danger">Error</h1>
+        <h2>Something went wrong</h2>
+        <p class="lead">An error occurred while processing your request.</p>
+        
+        <% if (error && error.message) { %>
+            <div class="alert alert-danger mt-4">
+                <%= error.message %>
+            </div>
+        <% } %>
+        
+        <div class="mt-4">
+            <a href="/movies" class="btn btn-primary">Go to Movies</a>
+            <button onclick="history.back()" class="btn btn-secondary">Go Back</button>
+        </div>
+    </div>
+</div>
+
+<style>
+.error-page {
+    padding: 60px 0;
+}
+</style>
