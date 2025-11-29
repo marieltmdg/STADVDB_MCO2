@@ -70,18 +70,19 @@ const tunnelConfigs = {
     host: '103.231.240.130',
     port: 60454, // This SSH port is accessible
     password: 'y4CUW63BZdM9Jr7QEjnGfxtR',
-    dstHost: '127.0.0.1',
+    dstHost: '10.2.14.54', // Use internal IP instead of localhost
     dstPort: 3306,
     localPort: 3306, // Local port for tunneled MySQL
     user: 'root', // MySQL user
+    password: 'y4CUW63BZdM9Jr7QEjnGfxtR', // MySQL password
     database: 'mco2' // MySQL database
   },
-  server2: {
+  server1: {
     username: 'root',
     host: '103.231.240.130',
     port: 60455, // This SSH port is accessible
     password: 'y4CUW63BZdM9Jr7QEjnGfxtR',
-    dstHost: '127.0.0.1',
+    dstHost: '10.2.14.55',
     dstPort: 3306,
     localPort: 3307, // Different local port to avoid conflicts
     user: 'root', // MySQL user
@@ -92,10 +93,11 @@ const tunnelConfigs = {
     host: '103.231.240.130',
     port: 60456, // This SSH port is accessible
     password: 'y4CUW63BZdM9Jr7QEjnGfxtR',
-    dstHost: '127.0.0.1',
+    dstHost: '10.2.14.56', // Use internal IP instead of localhost
     dstPort: 3306,
     localPort: 3308, // Different local port to avoid conflicts
     user: 'root', // MySQL user
+    password: 'y4CUW63BZdM9Jr7QEjnGfxtR', // MySQL password
     database: 'mco2' // MySQL database
   }
 };
