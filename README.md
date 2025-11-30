@@ -1,81 +1,84 @@
 # STADVDB MCO2 - Movie Database System
 
-A distributed movie database system with separate frontend and backend repositories, built for STADVDB (Advanced Database Systems) course.
+A unified movie database web application with distributed MySQL backend, built for STADVDB (Advanced Database Systems) course.
 
 ## Project Overview
 
 This project implements a complete movie database management system with:
-- **Frontend**: Web application with EJS templates
-- **Backend**: REST API with distributed database support
-- **Database**: 3-node MySQL cluster for distributed data storage
+- **Web Interface**: EJS templates with Bootstrap styling
+- **REST API**: Express.js backend with distributed database support
+- **Database**: 3-node MySQL cluster with SSH tunnel support
+- **Unified Architecture**: Single application serving both web interface and API
 
 ## Architecture
 
 ```
 STADVDB_MCO2/
-├── server/                  # REST API Server (Port 3001)
-│   ├── src/
-│   │   ├── app.js          # Express API server
-│   │   ├── controllers/    # API controllers
-│   │   ├── models/         # Data models with distributed DB
-│   │   ├── routes/         # API routes
-│   │   └── scripts/        # Database utilities
-│   ├── package.json
-│   └── .env
-│
-├── client/                 # Web Application (Port 3000)
-│   ├── src/
-│   │   ├── server.js       # Express web server
-│   │   ├── controllers/    # View controllers
-│   │   ├── routes/         # Web routes
-│   │   └── services/       # API client
-│   ├── views/              # EJS templates
-│   ├── public/             # Static assets
-│   ├── package.json
-│   └── .env
-│
-└── README.md               # This file
+├── main.js                 # Unified Express application entry point
+├── package.json           # Single dependency management
+├── .env                   # Environment configuration
+├── client/
+│   ├── public/           # Static assets (CSS, JS, images)
+│   └── views/            # EJS templates
+│       ├── layout.ejs    # Main layout template
+│       ├── movies/       # Movie-specific views
+│       ├── error.ejs     # Error pages
+│       └── 404.ejs       # Not found page
+├── server/src/
+│   ├── models/           # Data models with distributed DB
+│   ├── routes/           # API routes
+│   ├── services/         # SSH tunnel management
+│   └── scripts/          # Database utilities
+└── README.md
 ```
 
-## 🚀 **How to Run**
+## How to Run
 
-### **1. Start Server (Backend API)** 
+### Quick Start
 ```powershell
-cd server
+npm install
+npm start
+```
+
+The application will be available at: http://localhost:3000
+
+### Development Mode
+```powershell
 npm install
 npm run dev
 ```
-Server will be available at: http://localhost:3001
 
-### **2. Start Client (Frontend Web App)**
-```powershell
-cd client  
-npm install
-npm run dev
-```
-Client will be available at: http://localhost:3000
+Uses nodemon for automatic restarts during development.
 
-### **3. Access the Application**
-Visit http://localhost:3000 to use the movie database interface.
+### Available URLs
+- **Web Interface**: http://localhost:3000/movies
+- **API Endpoints**: http://localhost:3000/api/movies
+- **Health Check**: http://localhost:3000/api/health
 
-## 🗄️ **Database Setup**
+## Database Configuration
 
-### **Check Database Health**
-```powershell
-cd server
-npm run health
+### Connection Modes
+
+#### 1. Mock Data Mode (Default)
+Uses in-memory data for development and testing:
+```env
+DB_MODE=mock
 ```
 
-### **Initialize Distributed Database**
-```powershell
-cd server
-npm run init-db
+#### 2. Direct Database Mode
+Direct connection to MySQL servers:
+```env
+DB_MODE=direct
+DB_HOST=103.231.240.130
 ```
 
-This will:
-- Create the `movies_db` database on all 3 servers
-- Create the `movies` table with proper schema
-- Insert sample data according to the fragmentation strategy
+#### 3. SSH Tunnel Mode
+Secure connection through SSH tunnels:
+```env
+DB_MODE=ssh
+SSH_HOST=103.231.240.130
+SSH_PORTS=60454,60455,60456
+```
 
 ## Database Schema
 
@@ -94,16 +97,17 @@ This will:
 
 ## Features
 
-### Frontend Features
+### Web Interface Features
 - **Responsive UI**: Bootstrap-based design
 - **Movie Listing**: Paginated table with search/filter
 - **CRUD Operations**: Create, read, update, delete movies
 - **Form Validation**: Client and server-side validation
 - **Error Handling**: User-friendly error pages
 
-### Backend Features
+### API Features
 - **REST API**: Complete CRUD endpoints
 - **Distributed DB**: 3-node MySQL cluster support
+- **SSH Tunneling**: Secure database connections
 - **Mock Data**: Development mode with in-memory storage
 - **Error Handling**: Comprehensive error responses
 - **Health Monitoring**: Database connection health checks
@@ -121,130 +125,127 @@ This will:
 ### System API
 - `GET /api/health` - API health status
 
-## Development Modes
-
-### Mock Data Mode (Default)
-Uses in-memory data for development and testing:
-```env
-DB_MODE=mock
-```
-
-### Distributed Database Mode
-Connects to 3-node MySQL cluster on DLSU cloud:
-```env
-DB_MODE=distributed
-DB_HOST_NODE1=ccscloud.dlsu.edu.ph
-DB_PORT_NODE1=60754
-# ... additional node configurations
-```
+### Web Routes
+- `GET /` - Redirect to movies listing
+- `GET /movies` - Movies listing page
+- `GET /movies/:id` - Movie details page
+- `GET /movies/new` - New movie form
+- `GET /movies/:id/edit` - Edit movie form
+- `POST /movies` - Create movie (form submission)
+- `POST /movies/:id` - Update movie (form submission)
+- `POST /movies/:id/delete` - Delete movie
+- `GET /search` - Search movies
 
 ## Database Distribution Strategy
 
 ### Node Distribution (Year-based Partitioning)
-- **Node 1** (Port 60754): Movies 1880-1999
-- **Node 2** (Port 60755): Movies 2000-2009  
-- **Node 3** (Port 60756): Movies 2010-2030
+- **Server 0** (Port 60754): Central node with full dataset
+- **Server 1** (Port 60755): Fragment for even tconst numbers
+- **Server 2** (Port 60756): Fragment for odd tconst numbers
 
-### Replication
-- Each node serves as primary for its partition
-- Cross-replication for fault tolerance
-- Health monitoring and failover support
+### Connection Strategy
+1. **Direct Connection**: Attempt direct MySQL connections first
+2. **SSH Tunnel Fallback**: Use SSH tunnels if direct fails
+3. **Mock Data Fallback**: Use in-memory data if all connections fail
+
+### SSH Configuration
+- **Server 0 SSH**: Port 60454 → MySQL 3306
+- **Server 1 SSH**: Port 60455 → MySQL 3306 (if available)
+- **Server 2 SSH**: Port 60456 → MySQL 3306
 
 ## Scripts
 
-### Server Scripts
+### Available Scripts
 ```powershell
 npm start          # Production server
 npm run dev        # Development with nodemon
 npm run health     # Check database health
-npm run init-db    # Initialize distributed database
-```
-
-### Client Scripts
-```powershell
-npm start          # Production server
-npm run dev        # Development server
+npm run discover   # Discover database structure
 ```
 
 ## Technology Stack
 
-### Backend
+### Core Technologies
 - **Express.js** - Web framework
+- **EJS** - Template engine
 - **MySQL2** - Database driver
+- **Bootstrap 5** - CSS framework
+
+### Additional Libraries
+- **SSH2** - SSH tunnel connections
 - **CORS** - Cross-origin support
 - **dotenv** - Environment configuration
-
-### Frontend
-- **Express.js** - Web server
-- **EJS** - Template engine
-- **Axios** - HTTP client
-- **Bootstrap 5** - CSS framework
-- **Method-Override** - HTTP verb support
-
-## Deployment
-
-### Development
-1. Start backend: `cd backend && npm run dev`
-2. Start frontend: `cd frontend && npm run dev`
-3. Access application at http://localhost:3000
-
-### Production
-1. Configure environment variables
-2. Start backend: `cd backend && npm start`
-3. Start frontend: `cd frontend && npm start`
-4. Set up reverse proxy (nginx) for production routing
+- **express-ejs-layouts** - Layout support
+- **method-override** - HTTP verb support
 
 ## Environment Configuration
 
-### Backend (.env)
-```env
-PORT=3001
-NODE_ENV=development
-FRONTEND_URL=http://localhost:3000
-DB_MODE=mock
-# Database credentials for distributed mode
-```
-
-### Frontend (.env)
+### Main Configuration (.env)
 ```env
 PORT=3000
 NODE_ENV=development
-API_BASE_URL=http://localhost:3001/api
+FRONTEND_URL=http://localhost:3000
+
+# Database Configuration
+DB_MODE=mock
+
+# Server 0 - Central node
+DB0_HOST=ccscloud.dlsu.edu.ph
+DB0_PORT=60754
+DB0_USER=root
+DB0_PASSWORD=y4CUW63BZdM9Jr7QEjnGfxtR
+DB0_DATABASE=mco2
+
+# SSH Configuration
+SSH0_HOST=103.231.240.130
+SSH0_PORT=60454
+SSH2_HOST=103.231.240.130
+SSH2_PORT=60456
 ```
 
-## Contributing
+## Development
 
-1. **Backend changes**: Update models, controllers, routes in `backend/src/`
-2. **Frontend changes**: Update views, controllers in `frontend/src/`
-3. **Database changes**: Update schema and migration scripts
-4. **Testing**: Test both development and production modes
+### Local Development Setup
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Configure environment variables in `.env`
+4. Start development server: `npm run dev`
+5. Access application at http://localhost:3000
+
+### Production Deployment
+1. Configure production environment variables
+2. Install dependencies: `npm install --production`
+3. Start application: `npm start`
+4. Configure reverse proxy if needed
 
 ## Project Structure Benefits
 
-### Separation of Concerns
-- **Frontend**: Focuses on user interface and experience
-- **Backend**: Handles business logic and data persistence
-- **Database**: Manages distributed data storage
-
-### Independent Deployment
-- Frontend and backend can be deployed separately
-- Different scaling strategies for each tier
-- Technology stack can evolve independently
+### Unified Architecture
+- **Single Entry Point**: One main.js file handles everything
+- **Simplified Deployment**: Deploy one application instead of two
+- **No CORS Issues**: API and web interface on same origin
+- **Unified Dependencies**: Single package.json management
 
 ### Development Efficiency
-- Teams can work on frontend/backend simultaneously
-- Mock data allows frontend development without database
-- Clear API contract between frontend and backend
+- **Hot Reloading**: Nodemon for automatic restarts
+- **Mock Data**: Develop without database dependencies
+- **Error Handling**: Comprehensive error pages and API responses
+- **Health Monitoring**: Built-in database health checks
 
 ## Troubleshooting
 
 ### Common Issues
-1. **Port conflicts**: Ensure ports 3000, 3001 are available
+1. **Port conflicts**: Ensure port 3000 is available
 2. **Database connection**: Check VPN for DLSU cloud access
-3. **CORS errors**: Verify FRONTEND_URL in backend .env
-4. **API errors**: Check backend logs and health endpoint
+3. **SSH tunnel errors**: Verify SSH credentials and ports
+4. **Permission errors**: Port 3306 may require admin privileges
 
 ### Health Checks
-- Backend health: http://localhost:3001/api/health
-- Database health: `cd backend && npm run health`
-- Frontend status: Check browser console for API errors
+- **Application health**: http://localhost:3000/api/health
+- **Database status**: Check console logs during startup
+- **Connection mode**: Look for "mock", "direct", or "ssh" mode messages
+
+### Debug Information
+- **Connection attempts**: Monitor console for connection testing
+- **Fallback behavior**: Application automatically falls back to mock data
+- **Error logging**: All errors are logged with context
