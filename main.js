@@ -151,7 +151,9 @@ app.post('/movies', fragmentationCheck, async (req, res) => {
       runtimeMinutes: req.body.runtimeMinutes ? parseInt(req.body.runtimeMinutes) : null,
       genres: req.body.genres
     };
-    const created = await Movie.create(movieData);
+
+    const nodeName = process.env.NODE_ID || 'node1';
+    const created = await Movie.create(nodeName, movieData);
     // Replicate to other nodes
     replicateToNodes('create', created.id, created);
     res.redirect('/movies?message=Movie created successfully');
@@ -184,14 +186,15 @@ app.get('/movies/:id/edit', async (req, res) => {
   }
 });
 
-// Update movie
 app.post('/movies/:id', fragmentationCheck, async (req, res) => {
   const txId = Date.now() + Math.random();
   const id = req.params.id;
+
   // Acquire write lock
   if (!acquireLock(id, 'write', txId)) {
     return res.status(423).send('Resource is locked. Try again later.');
   }
+
   try {
     const updateData = {
       titleType: req.body.titleType,
@@ -203,44 +206,42 @@ app.post('/movies/:id', fragmentationCheck, async (req, res) => {
       runtimeMinutes: req.body.runtimeMinutes ? parseInt(req.body.runtimeMinutes) : null,
       genres: req.body.genres
     };
-    await Movie.update(id, updateData);
-    // Replicate to other nodes
+
+    // Pass the current node as nodeName
+    const nodeName = process.env.NODE_ID || 'node1';
+    await Movie.update(nodeName, id, updateData);
     replicateToNodes('update', id, updateData);
     res.redirect(`/movies/${id}?message=Movie updated successfully`);
   } catch (error) {
     console.error('Error updating movie:', error);
-    res.render('error', { 
-      error: error,
-      title: 'Error'
-    });
+    res.render('error', { error, title: 'Error' });
   } finally {
     releaseLock(id, txId);
   }
 });
 
-// Delete movie
 app.post('/movies/:id/delete', fragmentationCheck, async (req, res) => {
   const txId = Date.now() + Math.random();
   const id = req.params.id;
+
   // Acquire write lock
   if (!acquireLock(id, 'write', txId)) {
     return res.status(423).send('Resource is locked. Try again later.');
   }
+
   try {
-    await Movie.delete(id);
-    // Replicate to other nodes
+    const nodeName = process.env.NODE_ID || 'node1';
+    await Movie.delete(nodeName, id);
     replicateToNodes('delete', id);
     res.redirect('/movies?message=Movie deleted successfully');
   } catch (error) {
     console.error('Error deleting movie:', error);
-    res.render('error', { 
-      error: error,
-      title: 'Error'
-    });
+    res.render('error', { error, title: 'Error' });
   } finally {
     releaseLock(id, txId);
   }
 });
+
 
 // Search movies
 app.get('/search', async (req, res) => {

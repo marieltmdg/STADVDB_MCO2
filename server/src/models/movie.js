@@ -1,38 +1,8 @@
 
 require('dotenv').config();
 const mysql = require('mysql2/promise');
-
-// Node configs from .env
-const nodeConfigs = {
-  node1: {
-    host: process.env.DB_NODE1_IP,
-    user: process.env.DB_USER,
-    password: process.env.DB_USER_PASSWORD,
-    database: process.env.DB0_NAME,
-    port: 3306
-  },
-  node2: {
-    host: process.env.DB_NODE2_IP,
-    user: process.env.DB_USER,
-    password: process.env.DB_USER_PASSWORD,
-    database: process.env.DB1_NAME,
-    port: 3306
-  },
-  node3: {
-    host: process.env.DB_NODE3_IP,
-    user: process.env.DB_USER,
-    password: process.env.DB_USER_PASSWORD,
-    database: process.env.DB2_NAME,
-    port:3306
-  }
-};
-
-// Pools for each node
-const pools = {
-  node1: mysql.createPool(nodeConfigs.node1),
-  node2: mysql.createPool(nodeConfigs.node2),
-  node3: mysql.createPool(nodeConfigs.node3)
-};
+const RecoveryLog = require('./recoveryLog.js');
+const { pools } = require('../dbPools');
 
 
 const Movie = {
@@ -69,7 +39,7 @@ const Movie = {
       }, {}));
       return unique[0] || null;
     }
-  },
+    },
   async create(data) {
     const {
       titleType,
@@ -81,56 +51,43 @@ const Movie = {
       runtimeMinutes,
       genres
     } = data;
+
     let id;
+    let transactionId;
+
     try {
+      // Log the operation before applying
+      transactionId = await RecoveryLog.logOperation('INSERT', null, null, data);
+
       // Try node1 first
       const [result1] = await pools.node1.query(
         'INSERT INTO title_basics (titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
       );
       id = result1.insertId;
-    } catch (err) {
-      // If node1 is offline, get next autoincrement from node2 (even) or node3 (odd)
-      // Try node2 first (even)
-      const [auto2] = await pools.node2.query("SHOW TABLE STATUS LIKE 'title_basics'");
-      const nextId2 = auto2[0].Auto_increment;
-      // Try node3 (odd)
-      const [auto3] = await pools.node3.query("SHOW TABLE STATUS LIKE 'title_basics'");
-      const nextId3 = auto3[0].Auto_increment;
-      // Pick the lower one to avoid gaps, but ensure even/odd
-      if (nextId2 % 2 === 0) {
-        id = nextId2;
-        await pools.node2.query(
+
+      // Insert into node2 or node3 based on even/odd
+      const targetPool = id % 2 === 0 ? pools.node2 : pools.node3;
+      try {
+        await targetPool.query(
           'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
         );
-      } else {
-        id = nextId3;
-        await pools.node3.query(
-          'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
-        );
+      } catch (e) {
+        console.warn(`Replication to secondary node failed for id=${id}`);
       }
-      // Optionally, try to insert into both if possible
+
+      // Update recovery log as applied locally
+      await RecoveryLog.updateLocalStatus(transactionId, 'APPLIED', { id, ...data });
+      return { id, ...data };
+
+    } catch (err) {
+      console.error('Create operation failed:', err.message);
+      if (transactionId) await RecoveryLog.updateReplicationStatus(transactionId, 'FAILED');
+      throw err;
     }
-    // Insert into node2 if even, node3 if odd (if not already inserted above)
-    if (id % 2 === 0) {
-      try {
-        await pools.node2.query(
-          'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
-        );
-      } catch (e) {}
-    } else {
-      try {
-        await pools.node3.query(
-          'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
-        );
-      } catch (e) {}
-    }
-    return { id, ...data };
   },
+
   async update(id, data) {
     const {
       titleType,
@@ -142,36 +99,75 @@ const Movie = {
       runtimeMinutes,
       genres
     } = data;
-    // Always update node1
-    await pools.node1.query(
-      'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
-      [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres, id]
-    );
-    // Update node2 if even, node3 if odd
-    if (id % 2 === 0) {
-      await pools.node2.query(
+
+    let transactionId;
+
+    try {
+      // Get current state
+      const before = await this.getById(id);
+
+      // Log the operation
+      transactionId = await RecoveryLog.logOperation('UPDATE', id, before, data);
+
+      // Update node1
+      await pools.node1.query(
         'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
         [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres, id]
       );
-    } else {
-      await pools.node3.query(
-        'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
-        [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres, id]
-      );
+
+      // Update secondary node
+      const targetPool = id % 2 === 0 ? pools.node2 : pools.node3;
+      try {
+        await targetPool.query(
+          'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
+          [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres, id]
+        );
+      } catch (e) {
+        console.warn(`Replication update failed for id=${id}`);
+      }
+
+      await RecoveryLog.updateLocalStatus(transactionId, 'APPLIED', data);
+      return { id, ...data };
+
+    } catch (err) {
+      console.error('Update operation failed:', err.message);
+      if (transactionId) await RecoveryLog.updateReplicationStatus(transactionId, 'FAILED');
+      throw err;
     }
-    return { id, ...data };
   },
+
   async delete(id) {
-    // Always delete from node1
-    await pools.node1.query('DELETE FROM title_basics WHERE id = ?', [id]);
-    // Delete from node2 if even, node3 if odd
-    if (id % 2 === 0) {
-      await pools.node2.query('DELETE FROM title_basics WHERE id = ?', [id]);
-    } else {
-      await pools.node3.query('DELETE FROM title_basics WHERE id = ?', [id]);
+    let transactionId;
+
+    try {
+      // Get current state before deletion
+      const before = await this.getById(id);
+
+      // Log delete operation
+      transactionId = await RecoveryLog.logOperation('DELETE', id, before, null);
+
+      // Delete from node1
+      await pools.node1.query('DELETE FROM title_basics WHERE id = ?', [id]);
+
+      // Delete from secondary node
+      const targetPool = id % 2 === 0 ? pools.node2 : pools.node3;
+      try {
+        await targetPool.query('DELETE FROM title_basics WHERE id = ?', [id]);
+      } catch (e) {
+        console.warn(`Replication delete failed for id=${id}`);
+      }
+
+      await RecoveryLog.updateLocalStatus(transactionId, 'APPLIED');
+      return { id };
+
+    } catch (err) {
+      console.error('Delete operation failed:', err.message);
+      if (transactionId) await RecoveryLog.updateReplicationStatus(transactionId, 'FAILED');
+      throw err;
     }
-    return { id };
   },
+
+
   async getByParameters(params) {
     let query = 'SELECT * FROM title_basics WHERE 1=1';
     const values = [];
