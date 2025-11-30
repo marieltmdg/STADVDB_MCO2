@@ -1,9 +1,30 @@
+const { replicateToNodes } = require('./server/src/replication');
+// Fragmentation middleware
+function fragmentationCheck(req, res, next) {
+  const nodeId = process.env.NODE_ID;
+  let id = req.body.id || req.params.id;
+  if (!id) return next();
+  const isEven = parseInt(id) % 2 === 0;
+  if (nodeId === 'node2' && !isEven) {
+    return res.status(403).send('Node 2 only allows even-numbered id.');
+  }
+  if (nodeId === 'node3' && isEven) {
+    return res.status(403).send('Node 3 only allows odd-numbered id.');
+  }
+  next();
+}
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const expressLayouts = require('express-ejs-layouts');
 const Movie = require('./server/src/models/movie');
+const {
+  IsolationLevel,
+  acquireLock,
+  releaseLock,
+  getLocks
+} = require('./server/src/concurrency');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,6 +39,7 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
+
 // Middleware
 app.use(cors({
   origin: true,
@@ -25,6 +47,13 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Concurrency control middleware
+app.use((req, res, next) => {
+  // Set isolation level from query or default
+  req.isolationLevel = req.query.isolation || IsolationLevel.READ_COMMITTED;
+  next();
+});
 
 // Serve static files from client/public
 app.use(express.static(path.join(__dirname, 'client', 'public')));
@@ -58,7 +87,8 @@ app.get('/movies', async (req, res) => {
     res.render('movies/index', { 
       movies: movies,
       title: 'Movies Database',
-      message: req.query.message 
+      message: req.query.message,
+      searchQuery: {} // Always pass searchQuery
     });
   } catch (error) {
     console.error('Error loading movies:', error);
@@ -76,10 +106,19 @@ app.get('/movies/new', (req, res) => {
 });
 
 // Individual movie page
-app.get('/movies/:tconst', async (req, res) => {
+app.get('/movies/:id', fragmentationCheck, async (req, res) => {
+  const txId = Date.now() + Math.random();
+  const id = req.params.id;
+  // Debug: show which node is accessed
+  console.log(`[DEBUG] Node ${process.env.NODE_ID} accessed for read: id=${id}`);
+  // Acquire read lock
+  if (!acquireLock(id, 'read', txId)) {
+    return res.status(423).send('Resource is locked. Try again later.');
+  }
   try {
-    const movie = await Movie.getById(req.params.tconst);
+    const movie = await Movie.getById(id);
     if (!movie) {
+      releaseLock(id, txId);
       return res.status(404).render('404', { title: 'Movie Not Found' });
     }
     res.render('movies/show', { 
@@ -92,14 +131,17 @@ app.get('/movies/:tconst', async (req, res) => {
       error: error,
       title: 'Error'
     });
+  } finally {
+    releaseLock(id, txId);
   }
 });
 
 // Create movie
-app.post('/movies', async (req, res) => {
+app.post('/movies', fragmentationCheck, async (req, res) => {
+  const txId = Date.now() + Math.random();
+  // Acquire write lock (no id yet, so skip lock)
   try {
     const movieData = {
-      tconst: req.body.tconst,
       titleType: req.body.titleType,
       primaryTitle: req.body.primaryTitle,
       originalTitle: req.body.originalTitle,
@@ -109,8 +151,9 @@ app.post('/movies', async (req, res) => {
       runtimeMinutes: req.body.runtimeMinutes ? parseInt(req.body.runtimeMinutes) : null,
       genres: req.body.genres
     };
-    
-    await Movie.create(movieData);
+    const created = await Movie.create(movieData);
+    // Replicate to other nodes
+    replicateToNodes('create', created.id, created);
     res.redirect('/movies?message=Movie created successfully');
   } catch (error) {
     console.error('Error creating movie:', error);
@@ -122,9 +165,9 @@ app.post('/movies', async (req, res) => {
 });
 
 // Edit movie form
-app.get('/movies/:tconst/edit', async (req, res) => {
+app.get('/movies/:id/edit', async (req, res) => {
   try {
-    const movie = await Movie.getById(req.params.tconst);
+    const movie = await Movie.getById(req.params.id);
     if (!movie) {
       return res.status(404).render('404', { title: 'Movie Not Found' });
     }
@@ -142,7 +185,13 @@ app.get('/movies/:tconst/edit', async (req, res) => {
 });
 
 // Update movie
-app.post('/movies/:tconst', async (req, res) => {
+app.post('/movies/:id', fragmentationCheck, async (req, res) => {
+  const txId = Date.now() + Math.random();
+  const id = req.params.id;
+  // Acquire write lock
+  if (!acquireLock(id, 'write', txId)) {
+    return res.status(423).send('Resource is locked. Try again later.');
+  }
   try {
     const updateData = {
       titleType: req.body.titleType,
@@ -154,22 +203,33 @@ app.post('/movies/:tconst', async (req, res) => {
       runtimeMinutes: req.body.runtimeMinutes ? parseInt(req.body.runtimeMinutes) : null,
       genres: req.body.genres
     };
-    
-    await Movie.update(req.params.tconst, updateData);
-    res.redirect(`/movies/${req.params.tconst}?message=Movie updated successfully`);
+    await Movie.update(id, updateData);
+    // Replicate to other nodes
+    replicateToNodes('update', id, updateData);
+    res.redirect(`/movies/${id}?message=Movie updated successfully`);
   } catch (error) {
     console.error('Error updating movie:', error);
     res.render('error', { 
       error: error,
       title: 'Error'
     });
+  } finally {
+    releaseLock(id, txId);
   }
 });
 
 // Delete movie
-app.post('/movies/:tconst/delete', async (req, res) => {
+app.post('/movies/:id/delete', fragmentationCheck, async (req, res) => {
+  const txId = Date.now() + Math.random();
+  const id = req.params.id;
+  // Acquire write lock
+  if (!acquireLock(id, 'write', txId)) {
+    return res.status(423).send('Resource is locked. Try again later.');
+  }
   try {
-    await Movie.delete(req.params.tconst);
+    await Movie.delete(id);
+    // Replicate to other nodes
+    replicateToNodes('delete', id);
     res.redirect('/movies?message=Movie deleted successfully');
   } catch (error) {
     console.error('Error deleting movie:', error);
@@ -177,6 +237,8 @@ app.post('/movies/:tconst/delete', async (req, res) => {
       error: error,
       title: 'Error'
     });
+  } finally {
+    releaseLock(id, txId);
   }
 });
 
