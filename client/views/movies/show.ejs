@@ -1,7 +1,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1><%= movie.primaryTitle || 'Movie Details' %></h1>
     <div>
-        <a href="/movies/<%= encodeURIComponent(movie.tconst) %>/edit" class="btn btn-warning">Edit</a>
+        <a href="/movies/<%= encodeURIComponent(movie.id) %>/edit" class="btn btn-warning">Edit</a>
         <a href="/movies" class="btn btn-secondary">Back to List</a>
     </div>
 </div>
@@ -15,7 +15,7 @@
             <div class="card-body">
                 <dl class="row">
                     <dt class="col-sm-3">ID:</dt>
-                    <dd class="col-sm-9"><code><%= movie.tconst %></code></dd>
+                    <dd class="col-sm-9"><code><%= movie.id %></code></dd>
 
                     <dt class="col-sm-3">Type:</dt>
                     <dd class="col-sm-9">
@@ -65,8 +65,8 @@
             </div>
             <div class="card-body">
                 <div class="d-grid gap-2">
-                    <a href="/movies/<%= encodeURIComponent(movie.tconst) %>/edit" class="btn btn-warning">Edit Movie</a>
-                    <form method="POST" action="/movies/<%= encodeURIComponent(movie.tconst) %>?_method=DELETE">
+                    <a href="/movies/<%= encodeURIComponent(movie.id) %>/edit" class="btn btn-warning">Edit Movie</a>
+                    <form method="POST" action="/movies/<%= encodeURIComponent(movie.id) %>?_method=DELETE">
                         <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Are you sure you want to delete this movie?')">Delete Movie</button>
                     </form>
                     <a href="/movies" class="btn btn-secondary">Back to List</a>

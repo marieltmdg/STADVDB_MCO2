@@ -18,13 +18,7 @@
             <div class="card-body">
                 <form method="POST" action="/movies">
                     <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="tconst" class="form-label">Movie ID (tconst)</label>
-                            <input type="text" class="form-control" id="tconst" name="tconst" 
-                                   value="<%= typeof formData !== 'undefined' ? formData.tconst || '' : '' %>"
-                                   placeholder="e.g., tt0123456" pattern="tt[0-9]+">
-                            <div class="form-text">Leave empty to auto-generate</div>
-                        </div>
+                        <!-- tconst is now autoincrement, so no input field needed -->
                         <div class="col-md-6 mb-3">
                             <label for="titleType" class="form-label">Title Type</label>
                             <select class="form-select" id="titleType" name="titleType">
