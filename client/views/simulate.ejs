@@ -1,0 +1,86 @@
+<h1>Concurrency & Replication Simulator</h1>
+
+<div class="mb-3">
+    <label for="isolationLevel" class="form-label">Select Isolation Level:</label>
+    <select id="isolationLevel" class="form-select w-25">
+        <option value="READ_UNCOMMITTED">Read Uncommitted</option>
+        <option value="READ_COMMITTED" selected>Read Committed</option>
+        <option value="REPEATABLE_READ">Repeatable Read</option>
+        <option value="SERIALIZABLE">Serializable</option>
+    </select>
+</div>
+
+<div class="mb-3">
+    <button id="case1" class="btn btn-primary me-2">Run Case 1: Concurrent Reads</button>
+    <button id="case2" class="btn btn-warning me-2">Run Case 2: Read-Write</button>
+    <button id="case3" class="btn btn-success me-2">Run Case 3: Concurrent Writes</button>
+    <button id="stopSim" class="btn btn-danger">Stop</button>
+</div>
+
+<h3>Node States</h3>
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">Node 1</div>
+            <div class="card-body" id="node1State">Idle</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">Node 2</div>
+            <div class="card-body" id="node2State">Idle</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">Node 3</div>
+            <div class="card-body" id="node3State">Idle</div>
+        </div>
+    </div>
+</div>
+
+<h3>Replication Log</h3>
+<div class="table-responsive">
+    <table class="table table-striped table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th>Transaction ID</th>
+                <th>Operation</th>
+                <th>Target Node</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody id="replicationLog"></tbody>
+    </table>
+</div>
+
+<script>
+async function runCase(caseNum) {
+    const isolation = document.getElementById('isolationLevel').value;
+    // Reset states
+    ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent='Running...');
+    document.getElementById('replicationLog').innerHTML='';
+
+    const res = await fetch(`/api/simulate?case=${caseNum}&isolation=${isolation}`);
+    const data = await res.json();
+
+    data.nodeStates.forEach(node => {
+        document.getElementById(node.nodeId + 'State').textContent = node.status;
+    });
+
+    const logTable = document.getElementById('replicationLog');
+    data.replicationLog.forEach(log => {
+        const row = `<tr>
+            <td>${log.transactionId}</td>
+            <td>${log.operation}</td>
+            <td>${log.node}</td>
+            <td>${log.status}</td>
+        </tr>`;
+        logTable.insertAdjacentHTML('beforeend', row);
+    });
+}
+
+document.getElementById('case1').addEventListener('click', () => runCase(1));
+document.getElementById('case2').addEventListener('click', () => runCase(2));
+document.getElementById('case3').addEventListener('click', () => runCase(3));
+</script>
