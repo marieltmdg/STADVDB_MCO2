@@ -33,28 +33,34 @@ const pools = {
   node3: mysql.createPool(nodeConfigs.node3)
 };
 
-export async function begin_transaction(node) {
+async function begin_transaction(node, isolationLevel) {
   const conn = await pools[node].getConnection();
+  await conn.execute("SET SESSION TRANSACTION ISOLATION LEVEL ", isolationLevel);
   await conn.beginTransaction();
   return conn; 
 }
 
-export async function commit(conn) {
+async function commit(conn) {
   await conn.commit();
   conn.release();
 }
 
-export async function rollback(conn) {
+async function rollback(conn) {
   await conn.rollback();
   conn.release();
 }
 
-export async function read(conn, id) {
+async function read(conn, id) {
   const [rows] = await conn.query('SELECT * FROM table_basics WHERE id = ?', [id]);
   return rows[0] || null;
 }
 
 // Title for now
-export async function write(conn, id, data) {
+async function write(conn, id, data) {
   await conn.query("UPDATE title_basics SET primaryTitle = ? WHERE id = ?", [data], [id])
 }
+
+async function write_delete(conn, id) {
+  await conn.query("DELETE FROM title_basics WHERE id = ?", [id]);
+}
+module.exports = { begin_transaction, commit, rollback, read, write };
