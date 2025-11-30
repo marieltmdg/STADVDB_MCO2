@@ -8,13 +8,8 @@ const Movie = require('./server/src/models/movie');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Initialize database connections
-Movie.initialize()
-  .then(() => console.log('[INFO] Database connections ready'))
-  .catch(err => {
-    console.error('[ERROR] Failed to initialize database:', err.message);
-    // Don't exit - let the server run anyway for testing
-  });
+// Database pools are initialized automatically in the Movie model
+console.log('[INFO] Database pools initialized for Google Cloud SQL');
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
@@ -48,6 +43,8 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+
+
 // Web Interface Routes
 // Home page - redirect to movies
 app.get('/', (req, res) => {
@@ -72,6 +69,12 @@ app.get('/movies', async (req, res) => {
   }
 });
 
+// New movie form
+app.get('/movies/new', (req, res) => {
+  console.log('[DEBUG] /movies/new route hit');
+  res.render('movies/new', { title: 'Add New Movie' });
+});
+
 // Individual movie page
 app.get('/movies/:tconst', async (req, res) => {
   try {
@@ -90,11 +93,6 @@ app.get('/movies/:tconst', async (req, res) => {
       title: 'Error'
     });
   }
-});
-
-// New movie form
-app.get('/movies/new', (req, res) => {
-  res.render('movies/new', { title: 'Add New Movie' });
 });
 
 // Create movie
@@ -217,7 +215,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
+
+
+// 404 handler (should be last)
+// Place this after all other routes and middleware
 app.use('*', (req, res) => {
   res.status(404).render('404', { title: 'Page Not Found' });
 });
