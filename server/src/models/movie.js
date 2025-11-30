@@ -74,7 +74,28 @@ const Movie = {
           [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
         );
       } catch (e) {
-        console.warn(`Replication to secondary node failed for id=${id}`);
+        // If node1 is offline, get next autoincrement from node2 (even) or node3 (odd)
+        // Try node2 first (even)
+        const [auto2] = await pools.node2.query("SHOW TABLE STATUS LIKE 'title_basics'");
+        const nextId2 = auto2[0].Auto_increment;
+        // Try node3 (odd)
+        const [auto3] = await pools.node3.query("SHOW TABLE STATUS LIKE 'title_basics'");
+        const nextId3 = auto3[0].Auto_increment;
+        // Pick the lower one to avoid gaps, but ensure even/odd
+        if (nextId2 % 2 === 0) {
+          id = nextId2;
+          await pools.node2.query(
+            'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
+          );
+        } else {
+          id = nextId3;
+          await pools.node3.query(
+            'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
+          );
+        }
+        // Optionally, try to insert into both if possible
       }
 
       // Update recovery log as applied locally
