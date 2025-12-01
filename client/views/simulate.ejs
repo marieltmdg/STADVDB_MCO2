@@ -209,9 +209,9 @@ function displayResults(data) {
     if (data.dirtyRead !== undefined || (data.sets && data.sets.some(s => s.dirtyRead !== undefined))) {
         if (data.sets) {
             const anyDirtyRead = data.sets.some(s => s.dirtyRead);
-            dirtyReadSpan.textContent = anyDirtyRead ? 'YES ⚠️' : 'NO ✓';
+            dirtyReadSpan.textContent = anyDirtyRead ? 'YES ' : 'NO ';
         } else {
-            dirtyReadSpan.textContent = data.dirtyRead ? 'YES ⚠️' : 'NO ✓';
+            dirtyReadSpan.textContent = data.dirtyRead ? 'YES ' : 'NO ';
         }
         dirtyReadSpan.parentElement.style.display = 'block';
     } else {
