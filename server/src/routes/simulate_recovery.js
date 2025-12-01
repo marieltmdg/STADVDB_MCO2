@@ -74,13 +74,13 @@ async function resetPool(node) {
 }
 
 async function resetAllPools() {
-    for (const node of Object.keys(adminPools)) {
+    for (const node of Object.keys(pools)) {
         await resetPool(node);
     }
 }
 
 async function runOnNode(node, sql, params = []) {
-  const pool = adminPools[node];
+  const pool = pools[node];
 
   if (!pool) throw new Error('Unknown node: ' + node);
 
@@ -173,37 +173,6 @@ async function runCase1(even, odd) {
     // revert change so source DB stays clean
     await pools[s.src].query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, s.id]);
 
-    // // --- verify node1 didn't get the change; if it did, revert node1 too ---
-    // try {
-    //   const [node1Rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [s.id]);
-    //   const node1Row = node1Rows[0] || null;
-    //   if (node1Row && node1Row.primaryTitle === newTitle) {
-    //     // central has the updated title -> revert to original
-    //     await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, s.id]);
-    //     replicationLog.push({
-    //       transactionId: `node1-revert-${s.src}-${s.id}`,
-    //       operation: 'REVERT',
-    //       node: 'node1',
-    //       status: 'REVERTED',
-    //       details: { from: newTitle, to: before.primaryTitle }
-    //     });
-    //   } else {
-    //     replicationLog.push({
-    //       transactionId: `node1-check-${s.src}-${s.id}`,
-    //       operation: 'VERIFY_NODE1',
-    //       node: 'node1',
-    //       status: node1Row ? 'UNCHANGED' : 'MISSING'
-    //     });
-    //   }
-    // } catch (err) {
-    //   replicationLog.push({
-    //     transactionId: `node1-check-error-${s.src}-${s.id}`,
-    //     operation: 'VERIFY_NODE1',
-    //     node: 'node1',
-    //     status: 'ERROR',
-    //     message: err.message
-    //   });
-    // }
   }
 
   // include source nodes states as normal
@@ -395,80 +364,5 @@ router.get('/simulate/recovery', async (req, res) => {
   }
 });
 
-
-// router.get('/simulate/recovery', async (req, res) => {
-//   const caseNum = parseInt(req.query.case) || 1;
-
-//   console.log(`[RECOVERY SIMULATION] Running Case ${caseNum}`);
-
-//   try {
-//     if (caseNum === 1) {
-//       const out = await runCase1();
-//       return res.json({ success: true, case: 1, out });
-//     }
-
-//     if (caseNum === 2) {
-//       // Case 2: central node recovers and missed writes are applied
-//       // Restore node1 privileges then resolve pending logs for the sources
-//       await grantAll('node1');
-
-//       await RecoveryLog.resolvePendingLogs('node2', resolvePendingLog);
-//       await RecoveryLog.resolvePendingLogs('node3', resolvePendingLog);
-
-//       // Show last 10 rows on node1 and pending logs
-//       const [rows] = await pools.node1.query('SELECT * FROM title_basics ORDER BY id DESC LIMIT 10');
-//       const pending2 = await RecoveryLog.getPendingLogs('node2');
-//       const pending3 = await RecoveryLog.getPendingLogs('node3');
-
-//       return res.json({ success: true, case: 2, node1_recent: rows, pending: { node2: pending2, node3: pending3 } });
-//     }
-
-//     if (caseNum === 3) {
-//       // Case 3: central -> node2/node3 replication fails
-//       // Revoke SELECT on nodes so ping fails
-//       await revokeSelect('node2');
-//       await revokeSelect('node3');
-
-//       // Insert on node1 and attempt replicate
-//       const [auto1] = await pools.node1.query("SHOW TABLE STATUS LIKE 'title_basics'");
-//       const newId = auto1[0].Auto_increment;
-//       const data = { id: newId, titleType: 'movie', primaryTitle: 'RECOVERY_CASE3_CENTRAL', originalTitle: 'RECOVERY', isAdult: 0, startYear: 2025, endYear: null, runtimeMinutes: 88, genres: 'Test' };
-//       await pools.node1.query('INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [data.id, data.titleType, data.primaryTitle, data.originalTitle, data.isAdult, data.startYear, data.endYear, data.runtimeMinutes, data.genres]);
-
-//       try {
-//         await replicateOperation('node1', null, 'INSERT', data.id, data);
-//       } catch (err) {
-//         // expected: replication will create pending log on node1
-//       }
-
-//       const pending1 = await RecoveryLog.getPendingLogs('node1');
-//       return res.json({ success: true, case: 3, created: { node1: data.id }, pending1 });
-//     }
-
-//     if (caseNum === 4) {
-//       // Case 4: node2/node3 recovers and missed writes are applied (restore privileges and resolve)
-//       await grantAll('node2');
-//       await grantAll('node3');
-
-//       // Resolve pending logs originating from node1 and others
-//       await RecoveryLog.resolvePendingLogs('node1', resolvePendingLog);
-//       await RecoveryLog.resolvePendingLogs('node2', resolvePendingLog);
-//       await RecoveryLog.resolvePendingLogs('node3', resolvePendingLog);
-
-//       // Return recent states
-//       const [n2] = await pools.node2.query('SELECT * FROM title_basics ORDER BY id DESC LIMIT 10');
-//       const [n3] = await pools.node3.query('SELECT * FROM title_basics ORDER BY id DESC LIMIT 10');
-
-//       const pending1After = await RecoveryLog.getPendingLogs('node1');
-
-//       return res.json({ success: true, case: 4, node2_recent: n2, node3_recent: n3, pending1After });
-//     }
-
-//     return res.status(400).json({ success: false, message: 'Invalid case' });
-//   } catch (err) {
-//     console.error('[SIMULATE_RECOVERY] Error', err.message);
-//     return res.status(500).json({ success: false, error: err.message });
-//   }
-// });
 
 module.exports = router;
