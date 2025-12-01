@@ -12,14 +12,11 @@ const isolationLevelMap = {
   'SERIALIZABLE': 'SERIALIZABLE'
 };
 
-// Helper to set isolation level for a connection
 async function setIsolationLevel(connection, level) {
   const mysqlLevel = isolationLevelMap[level] || 'REPEATABLE READ';
-  // Use SET TRANSACTION instead of SET SESSION - applies to the next transaction only
   await connection.query(`SET TRANSACTION ISOLATION LEVEL ${mysqlLevel}`);
 }
 
-// Helper to get test movie IDs (one even, one odd)
 async function getTestMovieIds() {
   try {
     const [evenRows] = await pools.node1.query('SELECT id FROM title_basics WHERE id % 2 = 0 LIMIT 1');
@@ -30,20 +27,18 @@ async function getTestMovieIds() {
       odd: oddRows[0]?.id || 131771	
     };
   } catch (err) {
-    return { even: 137788, odd: 131771}; // fallback
+    return { even: 137788, odd: 131771};
   }
 }
 
-// Case 1: Concurrent reads on the same row from nodes
+// Case 1: Read-read
 async function runCase1(isolationLevel) {
   const testIds = await getTestMovieIds();
   const allResults = [];
 
-  // Run test for EVEN ID (node1 + node2)
   const evenResults = await runCase1SingleTest(testIds.even, isolationLevel, ['node1', 'node2'], 'EVEN');
   allResults.push(evenResults);
 
-  // Run test for ODD ID (node1 + node3)
   const oddResults = await runCase1SingleTest(testIds.odd, isolationLevel, ['node1', 'node3'], 'ODD');
   allResults.push(oddResults);
 
@@ -135,16 +130,16 @@ async function runCase1SingleTest(movieId, isolationLevel, nodes, setType) {
   }
 }
 
-// Case 2: One write with replication happening concurrently with reads
+// Case 2: Write-read
 async function runCase2(isolationLevel) {
   const testIds = await getTestMovieIds();
   const allResults = [];
 
-  // Run test for EVEN ID (node1 writes, replicates to node2, node2 reads during replication)
+  // Run test for even 
   const evenResults = await runCase2SingleTest(testIds.even, isolationLevel, 'node1', 'node2', 'EVEN');
   allResults.push(evenResults);
 
-  // Run test for ODD ID (node1 writes, replicates to node3, node3 reads during replication)
+  // Run test for odd 
   const oddResults = await runCase2SingleTest(testIds.odd, isolationLevel, 'node1', 'node3', 'ODD');
   allResults.push(oddResults);
 
@@ -336,16 +331,16 @@ async function runCase2SingleTest(movieId, isolationLevel, sourceNode, targetNod
   }
 }
 
-// Case 3: Concurrent writes - one node writing while another replicates to it
+// Case 3: Write-write 
 async function runCase3(isolationLevel) {
   const testIds = await getTestMovieIds();
   const allResults = [];
 
-  // Run test for EVEN ID (node1 and node2)
+  // Run test for even
   const evenResults = await runCase3SingleTest(testIds.even, isolationLevel, 'node1', 'node2', 'EVEN');
   allResults.push(evenResults);
 
-  // Run test for ODD ID (node1 and node3)
+  // Run test for odd
   const oddResults = await runCase3SingleTest(testIds.odd, isolationLevel, 'node1', 'node3', 'ODD');
   allResults.push(oddResults);
 
@@ -380,7 +375,6 @@ async function runCase3SingleTest(movieId, isolationLevel, node1Name, node2Name,
       await setIsolationLevel(conn2, isolationLevel);
       await setIsolationLevel(connReplication, isolationLevel);
 
-      // Step 1: Node1 writes and commits
       await conn1.beginTransaction();
       results.push({ node: node1Name, operation: 'START TRANSACTION', status: 'Success', timestamp: Date.now() - startTime });
 
@@ -398,7 +392,6 @@ async function runCase3SingleTest(movieId, isolationLevel, node1Name, node2Name,
       node1Committed = true;
       results.push({ node: node1Name, operation: 'COMMIT', status: 'Success', timestamp: Date.now() - startTime });
 
-      // Step 2: Simulate concurrent replication and local write on node2
       try {
         // Start replication transaction
         await connReplication.beginTransaction();

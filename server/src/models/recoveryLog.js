@@ -1,8 +1,6 @@
 const mysql = require('mysql2/promise');
 const { pools } = require('../dbPools');
 
-// Keep track of the last resolved log ID for each node
-// This way we don't have to scan all logs every time
 const checkpoints = {
   node1: 0,
   node2: 0,
@@ -10,8 +8,6 @@ const checkpoints = {
 };
 
 const RecoveryLog = {
-  // Creates a recovery log entry when replication fails
-  // Gets called from wherever the write happened
   async logOperation(pool_id, op_type, pk_value = null, before_values = null, after_values = null) {
     try {
       const currentPool = pools[pool_id];
@@ -41,7 +37,7 @@ const RecoveryLog = {
     }
   },
 
-  // Updates the status of a recovery log after trying to replicate it
+  // Update the status of a log entry
   async updateReplicationStatus(pool_id, log_id, status) {
     try {
       const currentPool = pools[pool_id];
@@ -62,7 +58,6 @@ const RecoveryLog = {
     }
   },
 
-  // Grabs all the logs that still need replication, starting after the checkpoint
   async getPendingLogs(pool_id) {
     try {
       const currentPool = pools[pool_id];
@@ -91,8 +86,7 @@ const RecoveryLog = {
     }
   },
 
-  // Goes through pending logs and tries to replicate them
-  // Call this after any write operation to catch up on failed replications
+  // To resolve pending logs for a given pool
   async resolvePendingLogs(pool_id, replicationFn) {
     try {
       const pendingLogs = await this.getPendingLogs(pool_id);
@@ -108,7 +102,6 @@ const RecoveryLog = {
 
       for (const log of pendingLogs) {
         try {
-          // Parse JSON values - handle cases where values might already be objects or null
           let beforeValues = null;
           let afterValues = null;
           
@@ -134,7 +127,6 @@ const RecoveryLog = {
             after_values: afterValues
           });
 
-          // If successful, update status to DONE
           await this.updateReplicationStatus(pool_id, log.log_id, 'DONE');
           
           // Track the highest resolved log_id
@@ -145,7 +137,7 @@ const RecoveryLog = {
           console.error(`[RECOVERY_LOG] Failed to resolve log_id=${log.log_id}:`, err.message);
           // Mark that not all logs were resolved
           allResolved = false;
-          // Keep status as PENDING for retry
+          // For retry
           await this.updateReplicationStatus(pool_id, log.log_id, 'PENDING');
         }
       }

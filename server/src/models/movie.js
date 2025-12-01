@@ -5,8 +5,6 @@ const RecoveryLog = require('./recoveryLog.js');
 const { replicateOperation, resolvePendingLog } = require('../replication');
 const { pools } = require('../dbPools');
 
-
-// Helper to check and resolve pending logs across all nodes
 const resolveAllPendingLogs = async () => {
   const nodes = ['node1', 'node2', 'node3'];
   for (const node of nodes) {
@@ -21,11 +19,9 @@ const resolveAllPendingLogs = async () => {
 const Movie = {
   async getAll(limit = 50, offset = 0) {
     try {
-      // Try node1 first
       const [rows] = await pools.node1.query('SELECT * FROM title_basics LIMIT ? OFFSET ?', [limit, offset]);
       return rows;
     } catch (err) {
-      // If node1 is unavailable, fallback to node2 and node3
       const [rows2] = await pools.node2.query('SELECT * FROM title_basics LIMIT ? OFFSET ?', [limit, offset]);
       const [rows3] = await pools.node3.query('SELECT * FROM title_basics LIMIT ? OFFSET ?', [limit, offset]);
       const merged = [...rows2, ...rows3];
@@ -39,11 +35,9 @@ const Movie = {
 
   async getById(id) {
     try {
-      // Try node1 first
       const [rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ?', [id]);
       return rows[0] || null;
     } catch (err) {
-      // If node1 is unavailable, fallback to node2 and node3
       const [rows2] = await pools.node2.query('SELECT * FROM title_basics WHERE id = ?', [id]);
       const [rows3] = await pools.node3.query('SELECT * FROM title_basics WHERE id = ?', [id]);
       const merged = [...rows2, ...rows3];
@@ -57,15 +51,12 @@ const Movie = {
 
   async getCount() {
     try {
-      // Try node1 first (central node has all records)
       const [rows] = await pools.node1.query('SELECT COUNT(*) as count FROM title_basics');
       return rows[0].count;
     } catch (err) {
-      // If node1 is unavailable, estimate from node2 and node3
       try {
         const [rows2] = await pools.node2.query('SELECT COUNT(*) as count FROM title_basics');
         const [rows3] = await pools.node3.query('SELECT COUNT(*) as count FROM title_basics');
-        // Since node2 has even IDs and node3 has odd IDs, sum them for total
         return rows2[0].count + rows3[0].count;
       } catch (fallbackErr) {
         console.error('All nodes unavailable for count:', fallbackErr);
@@ -74,7 +65,6 @@ const Movie = {
     }
   },
 
-  // Creates a new movie - tries node1 first, falls back to node2/node3 if needed
   async create(poolId, data) {
     const {
       titleType,
@@ -92,7 +82,6 @@ const Movie = {
     let actualPoolId = poolId;
 
     try {
-      // Try node1 first
       try {
         const [result] = await pools.node1.query(
           'INSERT INTO title_basics (titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
