@@ -353,32 +353,6 @@ async function runCase4(even, odd) {
   nodeStates.push({ nodeId: 'node1', status: 'OK', result: null });
 
 
-  // // Verify that node2 has the even id and node3 has the odd id after recovery
-  // const evenId = (typeof even !== 'undefined') ? even : (await getTestMovieIds()).even;
-  // const oddId = (typeof odd !== 'undefined') ? odd : (await getTestMovieIds()).odd;
-
-  // const [r2] = await pools.node2.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [evenId]);
-  // const [r3] = await pools.node3.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [oddId]);
-
-  // nodeStates.push({ nodeId: 'node2', status: 'OK', result: r2[0] || null });
-  // nodeStates.push({ nodeId: 'node3', status: 'OK', result: r3[0] || null });
-
-  // // Add verification entries to replication log
-  // replicationLog.push({
-  //   transactionId: `node2-${evenId}`,
-  //   operation: 'VERIFY',
-  //   node: 'node2',
-  //   status: r2[0] ? 'PRESENT' : 'MISSING',
-  //   details: r2[0] || null
-  // });
-  // replicationLog.push({
-  //   transactionId: `node3-${oddId}`,
-  //   operation: 'VERIFY',
-  //   node: 'node3',
-  //   status: r3[0] ? 'PRESENT' : 'MISSING',
-  //   details: r3[0] || null
-  // });
-
   return { nodeStates, replicationLog };
 }
 
@@ -392,12 +366,18 @@ router.get('/simulate/recovery', async (req, res) => {
     const even = 132710;
     const odd = 108531;
     if (caseNum === 1) {
-      
+      await grantAll("node1");
+      await grantAll("node2");
+      await grantAll("node3");
+      await sleep(SLEEP);
       result = await runCase1(even, odd); 
     }
     else if (caseNum === 2) result = await runCase2(even, odd);
     else if (caseNum === 3) {
-
+      await grantAll("node1");
+      await grantAll("node2");
+      await grantAll("node3");
+      await sleep(SLEEP);
       result = await runCase3(even, odd);
     }
     else if (caseNum === 4) result = await runCase4(even, odd);
