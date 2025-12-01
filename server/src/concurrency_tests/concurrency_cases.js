@@ -1,20 +1,27 @@
-const ID = '0038276'; // Change to a valid id in your DB
-const { begin_transaction, commit, rollback, read, write } = require("/concurrency_model.js");
+const ID = '135243'; // Change to a valid id in your DB
+const { begin_transaction, commit, rollback, read, write } = require("../models/concurrency_model.js");
 
 // Case #1:  Concurrent transactions in two or more nodes are reading the same data item
 async function concurrencyCase1(isolationLevel) {
   try {
-    const conn2 = begin_transaction("node2", isolationLevel); 
+    const conn1 = begin_transaction("node1", isolationLevel); 
     const conn3 = begin_transaction("node3", isolationLevel);
 
-    const [result2, result3] = await Promise.all([
-      read(conn2, ID),
+    const [result1, result3] = await Promise.all([
+      read(conn1, ID),
       read(conn3, ID)
     ]);
 
-    console.log("Node 2 Read: ", result2);
+    console.log("Node 1 Read: ", result1);
     console.log("Node 3 Read: ", result3);
 
+    // Commit the read transactions
+    await Promise.all([
+      commit(conn1),
+      commit(conn3)
+    ]);
+
+    console.log("Case 1 Complete");
   }
   catch (err) {
     console.log("Error in Case 1: ", err);
@@ -50,16 +57,16 @@ async function concurrencyCase2(isolationLevel) {
 
 
 // Case #3: Concurrent transactions in two or more nodes are writing (update / deletion) on the same data item.
-async function concurrencyCase2(isolationLevel) {
+async function concurrencyCase3(isolationLevel) {
   try {
     const conn1 = begin_transaction("node1", isolationLevel);
     const conn2 = begin_transaction("node2", isolationLevel);
     const conn3 = begin_transaction("node3", isolationLevel);
 
     await Promise.all([
-      read(conn1, ID, "New Title"),
-      write(conn2, ID),
-      write(conn3, ID)
+      write(conn1, ID, "Title from Node 1"),
+      write(conn2, ID, "Title from Node 2"),
+      write(conn3, ID, "Title from Node 3")
     ]);
 
     await Promise.all([
@@ -73,5 +80,4 @@ async function concurrencyCase2(isolationLevel) {
   catch (err) {
     console.log("Error in Case 3", err);
   }
-
 }

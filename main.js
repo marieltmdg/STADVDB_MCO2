@@ -256,7 +256,12 @@ app.get('/search', async (req, res) => {
 
 // Concurrency control simulation page
 app.get('/simulate', (req, res) => {
-    res.render('simulate', { title: 'Concurrency & Replication Simulator' });
+    res.render('simulate', { 
+        title: 'Concurrency & Replication Simulator',
+        DB_NODE1_IP: process.env.DB_NODE1_IP,
+        DB_NODE2_IP: process.env.DB_NODE2_IP,
+        DB_NODE3_IP: process.env.DB_NODE3_IP
+    });
 });
 
 // Error handling middleware (after all routes)

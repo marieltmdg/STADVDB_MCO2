@@ -14,7 +14,8 @@
     <button id="case1" class="btn btn-primary me-2">Run Case 1: Concurrent Reads</button>
     <button id="case2" class="btn btn-warning me-2">Run Case 2: Read-Write</button>
     <button id="case3" class="btn btn-success me-2">Run Case 3: Concurrent Writes</button>
-    <button id="stopSim" class="btn btn-danger">Stop</button>
+    <button id="stopSim" class="btn btn-danger me-2">Stop</button>
+    <button id="checkStatus" class="btn btn-info">Check Server Status</button>
 </div>
 
 <h3>Node States</h3>
@@ -22,19 +23,28 @@
     <div class="col-md-4">
         <div class="card">
             <div class="card-header">Node 1</div>
-            <div class="card-body" id="node1State">Idle</div>
+            <div class="card-body">
+                <div id="node1State">Idle</div>
+                <small class="text-muted" id="node1Result"></small>
+            </div>
         </div>
     </div>
     <div class="col-md-4">
         <div class="card">
             <div class="card-header">Node 2</div>
-            <div class="card-body" id="node2State">Idle</div>
+            <div class="card-body">
+                <div id="node2State">Idle</div>
+                <small class="text-muted" id="node2Result"></small>
+            </div>
         </div>
     </div>
     <div class="col-md-4">
         <div class="card">
             <div class="card-header">Node 3</div>
-            <div class="card-body" id="node3State">Idle</div>
+            <div class="card-body">
+                <div id="node3State">Idle</div>
+                <small class="text-muted" id="node3Result"></small>
+            </div>
         </div>
     </div>
 </div>
@@ -59,6 +69,7 @@ async function runCase(caseNum) {
     const isolation = document.getElementById('isolationLevel').value;
     // Reset states
     ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent='Running...');
+    ['node1Result','node2Result','node3Result'].forEach(id => document.getElementById(id).textContent='');
     document.getElementById('replicationLog').innerHTML='';
 
     const res = await fetch(`/api/simulate?case=${caseNum}&isolation=${isolation}`);
@@ -66,6 +77,16 @@ async function runCase(caseNum) {
 
     data.nodeStates.forEach(node => {
         document.getElementById(node.nodeId + 'State').textContent = node.status;
+        const resultElement = document.getElementById(node.nodeId + 'Result');
+        if (node.result && node.result !== null) {
+            if (typeof node.result === 'object') {
+                resultElement.textContent = `Result: ${JSON.stringify(node.result, null, 2)}`;
+            } else {
+                resultElement.textContent = `Result: ${node.result}`;
+            }
+        } else {
+            resultElement.textContent = '';
+        }
     });
 
     const logTable = document.getElementById('replicationLog');
@@ -80,7 +101,42 @@ async function runCase(caseNum) {
     });
 }
 
+// Health check for all nodes
+async function checkServerStatus() {
+  const nodes = [
+    { id: 'node1', url: `/api/health` },
+    { id: 'node2', url: `/api/health` },
+    { id: 'node3', url: `/api/health` }
+  ];
+  for (const node of nodes) {
+    try {
+      const res = await fetch(node.url);
+      const data = await res.json();
+      document.getElementById(node.id + 'State').textContent = data.status;
+    } catch {
+      document.getElementById(node.id + 'State').textContent = 'Offline';
+    }
+  }
+}
+
+// Stop simulation
+let currentSimulation = null;
+function stopSimulation() {
+  if (currentSimulation) {
+    currentSimulation.abort();
+    ['node1State','node2State','node3State'].forEach(id => 
+      document.getElementById(id).textContent = 'Stopped'
+    );
+    ['node1Result','node2Result','node3Result'].forEach(id => 
+      document.getElementById(id).textContent = ''
+    );
+    document.getElementById('replicationLog').innerHTML = '';
+  }
+}
+
 document.getElementById('case1').addEventListener('click', () => runCase(1));
 document.getElementById('case2').addEventListener('click', () => runCase(2));
 document.getElementById('case3').addEventListener('click', () => runCase(3));
+document.getElementById('checkStatus').addEventListener('click', checkServerStatus);
+document.getElementById('stopSim').addEventListener('click', stopSimulation);
 </script>
