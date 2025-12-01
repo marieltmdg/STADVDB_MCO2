@@ -25,7 +25,6 @@
             <button id="case1" class="btn btn-primary me-2">Run Case 1</button>
             <button id="case2" class="btn btn-warning me-2">Run Case 2</button>
             <button id="case3" class="btn btn-success me-2">Run Case 3</button>
-            <button id="runAll" class="btn btn-info">Run All Cases</button>
         </div>
     </div>
 </div>
@@ -75,35 +74,7 @@
     </div>
 </div>
 
-<div id="comparisonContainer" style="display: none;">
-    <div class="card">
-        <div class="card-header bg-primary text-white">
-            <h5 class="mb-0">Isolation Level Comparison</h5>
-        </div>
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-bordered">
-                    <thead>
-                        <tr>
-                            <th>Isolation Level</th>
-                            <th>Case 1 (Reads)</th>
-                            <th>Case 2 (R/W)</th>
-                            <th>Case 3 (Writes)</th>
-                            <th>Performance</th>
-                        </tr>
-                    </thead>
-                    <tbody id="comparisonTable"></tbody>
-                </table>
-            </div>
-            <div class="alert alert-success mt-3">
-                <strong>Recommendation:</strong> <span id="recommendation"></span>
-            </div>
-        </div>
-    </div>
-</div>
-
 <script>
-let comparisonData = {};
 
 async function runCase(caseNum) {
     const isolation = document.getElementById('isolationLevel').value;
@@ -124,12 +95,6 @@ async function runCase(caseNum) {
         }
 
         displayResults(data);
-        
-        // Store for comparison
-        if (!comparisonData[isolation]) {
-            comparisonData[isolation] = {};
-        }
-        comparisonData[isolation][`case${caseNum}`] = data;
 
     } catch (err) {
         alert('Error: ' + err.message);
@@ -254,71 +219,7 @@ function displayResults(data) {
     }
 }
 
-async function runAllCases() {
-    const isolation = document.getElementById('isolationLevel').value;
-    document.getElementById('comparisonContainer').style.display = 'none';
-    
-    for (let i = 1; i <= 3; i++) {
-        await runCase(i);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Delay between tests
-    }
-    
-    // Show comparison
-    updateComparison();
-}
-
-function updateComparison() {
-    const comparisonContainer = document.getElementById('comparisonContainer');
-    const comparisonTable = document.getElementById('comparisonTable');
-    
-    if (Object.keys(comparisonData).length === 0) return;
-    
-    comparisonContainer.style.display = 'block';
-    comparisonTable.innerHTML = '';
-    
-    Object.keys(comparisonData).forEach(isolation => {
-        const cases = comparisonData[isolation];
-        const row = `<tr>
-            <td><strong>${isolation}</strong></td>
-            <td>${cases.case1 ? (cases.case1.consistency ? '✓ Consistent' : '✗ Inconsistent') : 'Not tested'}</td>
-            <td>${cases.case2 ? (cases.case2.consistency ? '✓ Consistent' : '✗ Inconsistent') + (cases.case2.dirtyRead ? ' (Dirty Read)' : '') : 'Not tested'}</td>
-            <td>${cases.case3 ? (cases.case3.consistency ? '✓ Consistent' : '✗ Inconsistent') : 'Not tested'}</td>
-            <td>${getPerformanceRating(isolation)}</td>
-        </tr>`;
-        comparisonTable.insertAdjacentHTML('beforeend', row);
-    });
-    
-    document.getElementById('recommendation').textContent = getRecommendation();
-}
-
-function getPerformanceRating(isolation) {
-    const ratings = {
-        'READ_UNCOMMITTED': '⚡⚡⚡⚡ (Highest)',
-        'READ_COMMITTED': '⚡⚡⚡ (High)',
-        'REPEATABLE_READ': '⚡⚡ (Medium)',
-        'SERIALIZABLE': '⚡ (Lowest)'
-    };
-    return ratings[isolation] || 'Unknown';
-}
-
-function getRecommendation() {
-    // Based on testing, recommend the highest throughput level that maintains consistency
-    const levels = ['READ_UNCOMMITTED', 'READ_COMMITTED', 'REPEATABLE_READ', 'SERIALIZABLE'];
-    
-    for (const level of levels) {
-        const data = comparisonData[level];
-        if (data && data.case1 && data.case2 && data.case3) {
-            if (data.case1.consistency && data.case2.consistency && data.case3.consistency && !data.case2.dirtyRead) {
-                return `Use ${level} - provides consistency while allowing good concurrency.`;
-            }
-        }
-    }
-    
-    return 'Run all test cases with different isolation levels to get a recommendation.';
-}
-
 document.getElementById('case1').addEventListener('click', () => runCase(1));
 document.getElementById('case2').addEventListener('click', () => runCase(2));
 document.getElementById('case3').addEventListener('click', () => runCase(3));
-document.getElementById('runAll').addEventListener('click', runAllCases);
 </script>

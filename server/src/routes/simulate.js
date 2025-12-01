@@ -26,11 +26,11 @@ async function getTestMovieIds() {
     const [oddRows] = await pools.node1.query('SELECT id FROM title_basics WHERE id % 2 = 1 LIMIT 1');
     
     return {
-      even: evenRows[0]?.id || 2,
-      odd: oddRows[0]?.id || 1
+      even: evenRows[0]?.id || 137788,
+      odd: oddRows[0]?.id || 131771	
     };
   } catch (err) {
-    return { even: 2, odd: 1 }; // fallback
+    return { even: 137788, odd: 131771}; // fallback
   }
 }
 
@@ -486,6 +486,18 @@ async function runCase3SingleTest(movieId, isolationLevel, node1Name, node2Name,
         { node: node2Name, title: final2[0]?.primaryTitle }
       ];
 
+      // Determine which transaction committed later
+      const replicationCommitTime = results.find(r => r.operation === 'COMMIT REPLICATION')?.timestamp || 0;
+      const localWriteCommitTime = results.find(r => r.operation === 'COMMIT LOCAL WRITE')?.timestamp || 0;
+      
+      // Expected winner is the later commit
+      const node2Title = `${node2Name.toUpperCase()}_${setType}_${timestamp}`;
+      const expectedWinner = localWriteCommitTime > replicationCommitTime ? node2Title : node1Title;
+      
+      // Consistency is achieved if the later transaction is the winner
+      const actualWinner = finalState[1].title; // Node2 has the final state after concurrent writes
+      const isConsistent = actualWinner === expectedWinner;
+
       // Restore original value on nodes that successfully committed
       const restorePromises = [];
       if (node1Committed) {
@@ -503,9 +515,10 @@ async function runCase3SingleTest(movieId, isolationLevel, node1Name, node2Name,
         movieId,
         nodes: [node1Name, node2Name],
         results,
-        consistency: finalState[0].title === finalState[1].title,
+        consistency: isConsistent,
         finalState,
-        winner: finalState[0].title
+        winner: finalState[0].title,
+        expectedWinner: expectedWinner
       };
 
     } finally {
