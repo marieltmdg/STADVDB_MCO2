@@ -1,142 +1,324 @@
 <h1>Concurrency & Replication Simulator</h1>
 
-<div class="mb-3">
-    <label for="isolationLevel" class="form-label">Select Isolation Level:</label>
-    <select id="isolationLevel" class="form-select w-25">
-        <option value="READ_UNCOMMITTED">Read Uncommitted</option>
-        <option value="READ_COMMITTED" selected>Read Committed</option>
-        <option value="REPEATABLE_READ">Repeatable Read</option>
-        <option value="SERIALIZABLE">Serializable</option>
-    </select>
+<div class="alert alert-info">
+    <strong>Test Cases:</strong>
+    <ul class="mb-0">
+        <li><strong>Case 1:</strong> Concurrent reads on the same row from all nodes</li>
+        <li><strong>Case 2:</strong> One write and two reads on the same row</li>
+        <li><strong>Case 3:</strong> Concurrent writes on the same row from all nodes</li>
+    </ul>
 </div>
 
-<div class="mb-3">
-    <button id="case1" class="btn btn-primary me-2">Run Case 1: Concurrent Reads</button>
-    <button id="case2" class="btn btn-warning me-2">Run Case 2: Read-Write</button>
-    <button id="case3" class="btn btn-success me-2">Run Case 3: Concurrent Writes</button>
-    <button id="stopSim" class="btn btn-danger me-2">Stop</button>
-    <button id="checkStatus" class="btn btn-info">Check Server Status</button>
-</div>
-
-<h3>Node States</h3>
-<div class="row mb-4">
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">Node 1</div>
-            <div class="card-body">
-                <div id="node1State">Idle</div>
-                <small class="text-muted" id="node1Result"></small>
-            </div>
-        </div>
+<div class="row mb-3">
+    <div class="col-md-6">
+        <label for="isolationLevel" class="form-label">Select Isolation Level:</label>
+        <select id="isolationLevel" class="form-select">
+            <option value="READ_UNCOMMITTED">Read Uncommitted</option>
+            <option value="READ_COMMITTED">Read Committed</option>
+            <option value="REPEATABLE_READ" selected>Repeatable Read</option>
+            <option value="SERIALIZABLE">Serializable</option>
+        </select>
     </div>
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">Node 2</div>
-            <div class="card-body">
-                <div id="node2State">Idle</div>
-                <small class="text-muted" id="node2Result"></small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">Node 3</div>
-            <div class="card-body">
-                <div id="node3State">Idle</div>
-                <small class="text-muted" id="node3Result"></small>
-            </div>
+    <div class="col-md-6">
+        <label class="form-label">Actions:</label>
+        <div>
+            <button id="case1" class="btn btn-primary me-2">Run Case 1</button>
+            <button id="case2" class="btn btn-warning me-2">Run Case 2</button>
+            <button id="case3" class="btn btn-success me-2">Run Case 3</button>
+            <button id="runAll" class="btn btn-info">Run All Cases</button>
         </div>
     </div>
 </div>
 
-<h3>Replication Log</h3>
-<div class="table-responsive">
-    <table class="table table-striped table-hover">
-        <thead class="table-dark">
-            <tr>
-                <th>Transaction ID</th>
-                <th>Operation</th>
-                <th>Target Node</th>
-                <th>Status</th>
-            </tr>
-        </thead>
-        <tbody id="replicationLog"></tbody>
-    </table>
+<div id="loadingIndicator" class="alert alert-primary" style="display: none;">
+    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+    Running simulation...
+</div>
+
+<div id="resultsContainer" style="display: none;">
+    <div class="card mb-4">
+        <div class="card-header bg-dark text-white">
+            <h5 class="mb-0">Test Results: <span id="resultTitle"></span></h5>
+        </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <strong>Movie ID:</strong> <span id="movieId"></span>
+                </div>
+                <div class="col-md-4">
+                    <strong>Consistency:</strong> <span id="consistency" class="badge"></span>
+                </div>
+                <div class="col-md-4">
+                    <strong>Dirty Read Detected:</strong> <span id="dirtyRead"></span>
+                </div>
+            </div>
+            
+            <h6>Transaction Timeline</h6>
+            <div class="table-responsive mb-3">
+                <table class="table table-sm table-striped">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Time (ms)</th>
+                            <th>Node</th>
+                            <th>Operation</th>
+                            <th>Status</th>
+                            <th>Data</th>
+                        </tr>
+                    </thead>
+                    <tbody id="timelineTable"></tbody>
+                </table>
+            </div>
+
+            <h6>Final State Across Nodes</h6>
+            <div class="row" id="finalStateContainer"></div>
+        </div>
+    </div>
+</div>
+
+<div id="comparisonContainer" style="display: none;">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">Isolation Level Comparison</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Isolation Level</th>
+                            <th>Case 1 (Reads)</th>
+                            <th>Case 2 (R/W)</th>
+                            <th>Case 3 (Writes)</th>
+                            <th>Performance</th>
+                        </tr>
+                    </thead>
+                    <tbody id="comparisonTable"></tbody>
+                </table>
+            </div>
+            <div class="alert alert-success mt-3">
+                <strong>Recommendation:</strong> <span id="recommendation"></span>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
+let comparisonData = {};
+
 async function runCase(caseNum) {
     const isolation = document.getElementById('isolationLevel').value;
-    // Reset states
-    ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent='Running...');
-    ['node1Result','node2Result','node3Result'].forEach(id => document.getElementById(id).textContent='');
-    document.getElementById('replicationLog').innerHTML='';
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const resultsContainer = document.getElementById('resultsContainer');
+    
+    loadingIndicator.style.display = 'block';
+    resultsContainer.style.display = 'none';
 
-    const res = await fetch(`/api/simulate?case=${caseNum}&isolation=${isolation}`);
-    const data = await res.json();
-
-    data.nodeStates.forEach(node => {
-        document.getElementById(node.nodeId + 'State').textContent = node.status;
-        const resultElement = document.getElementById(node.nodeId + 'Result');
-        if (node.result && node.result !== null) {
-            if (typeof node.result === 'object') {
-                resultElement.textContent = `Result: ${JSON.stringify(node.result, null, 2)}`;
-            } else {
-                resultElement.textContent = `Result: ${node.result}`;
-            }
-        } else {
-            resultElement.textContent = '';
-        }
-    });
-
-    const logTable = document.getElementById('replicationLog');
-    data.replicationLog.forEach(log => {
-        const row = `<tr>
-            <td>${log.transactionId}</td>
-            <td>${log.operation}</td>
-            <td>${log.node}</td>
-            <td>${log.status}</td>
-        </tr>`;
-        logTable.insertAdjacentHTML('beforeend', row);
-    });
-}
-
-// Health check for all nodes
-async function checkServerStatus() {
-  const nodes = [
-    { id: 'node1', url: `/api/health` },
-    { id: 'node2', url: `/api/health` },
-    { id: 'node3', url: `/api/health` }
-  ];
-  for (const node of nodes) {
     try {
-      const res = await fetch(node.url);
-      const data = await res.json();
-      document.getElementById(node.id + 'State').textContent = data.status;
-    } catch {
-      document.getElementById(node.id + 'State').textContent = 'Offline';
+        const res = await fetch(`/api/simulate?case=${caseNum}&isolation=${isolation}`);
+        const data = await res.json();
+
+        if (!data.success) {
+            alert('Test failed: ' + data.error);
+            loadingIndicator.style.display = 'none';
+            return;
+        }
+
+        displayResults(data);
+        
+        // Store for comparison
+        if (!comparisonData[isolation]) {
+            comparisonData[isolation] = {};
+        }
+        comparisonData[isolation][`case${caseNum}`] = data;
+
+    } catch (err) {
+        alert('Error: ' + err.message);
+    } finally {
+        loadingIndicator.style.display = 'none';
     }
-  }
 }
 
-// Stop simulation
-let currentSimulation = null;
-function stopSimulation() {
-  if (currentSimulation) {
-    currentSimulation.abort();
-    ['node1State','node2State','node3State'].forEach(id => 
-      document.getElementById(id).textContent = 'Stopped'
-    );
-    ['node1Result','node2Result','node3Result'].forEach(id => 
-      document.getElementById(id).textContent = ''
-    );
-    document.getElementById('replicationLog').innerHTML = '';
-  }
+function displayResults(data) {
+    const resultsContainer = document.getElementById('resultsContainer');
+    resultsContainer.style.display = 'block';
+
+    document.getElementById('resultTitle').textContent = 
+        `Case ${data.case} - ${data.isolationLevel}`;
+    
+    const consistencyBadge = document.getElementById('consistency');
+    consistencyBadge.textContent = data.overallConsistency ? 'CONSISTENT' : 'INCONSISTENT';
+    consistencyBadge.className = data.overallConsistency ? 'badge bg-success' : 'badge bg-danger';
+
+    // Display results for each set (EVEN and ODD)
+    const timelineTable = document.getElementById('timelineTable');
+    timelineTable.innerHTML = '';
+
+    const finalStateContainer = document.getElementById('finalStateContainer');
+    finalStateContainer.innerHTML = '';
+
+    if (data.sets) {
+        // Multiple sets (EVEN and ODD)
+        data.sets.forEach(set => {
+            // Add set header
+            const headerRow = document.createElement('tr');
+            headerRow.className = 'table-info';
+            headerRow.innerHTML = `<td colspan="5"><strong>${set.setType} ID (${set.movieId}) - Nodes: ${set.nodes.join(', ')}</strong></td>`;
+            timelineTable.appendChild(headerRow);
+
+            // Add timeline rows sorted by timestamp
+            const sortedResults = [...set.results].sort((a, b) => a.timestamp - b.timestamp);
+            sortedResults.forEach(r => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${r.timestamp}</td>
+                    <td><span class="badge bg-secondary">${r.node}</span></td>
+                    <td>${r.operation}</td>
+                    <td><span class="badge ${r.status.includes('Success') ? 'bg-success' : 'bg-danger'}">${r.status}</span></td>
+                    <td>${r.data || ''}</td>
+                `;
+                timelineTable.appendChild(row);
+            });
+
+            // Add final state for this set
+            const setCard = document.createElement('div');
+            setCard.className = 'col-md-6 mb-3';
+            setCard.innerHTML = `
+                <div class="card">
+                    <div class="card-header bg-secondary text-white">
+                        <strong>${set.setType} ID: ${set.movieId}</strong>
+                    </div>
+                    <div class="card-body">
+                        ${set.finalState.map(s => `
+                            <div class="mb-2">
+                                <span class="badge bg-info">${s.node}</span>: ${s.title || 'N/A'}
+                            </div>
+                        `).join('')}
+                        <div class="mt-2">
+                            <span class="badge ${set.consistency ? 'bg-success' : 'bg-danger'}">
+                                ${set.consistency ? 'Consistent' : 'Inconsistent'}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            finalStateContainer.appendChild(setCard);
+        });
+
+        // Update movie ID display to show both
+        document.getElementById('movieId').textContent = 
+            data.sets.map(s => `${s.setType}: ${s.movieId}`).join(', ');
+
+    } else {
+        // Old format fallback (single result)
+        document.getElementById('movieId').textContent = data.movieId || 'N/A';
+        
+        const sortedResults = data.results ? [...data.results].sort((a, b) => a.timestamp - b.timestamp) : [];
+        sortedResults.forEach(r => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${r.timestamp}</td>
+                <td><span class="badge bg-secondary">${r.node}</span></td>
+                <td>${r.operation}</td>
+                <td><span class="badge ${r.status.includes('Success') ? 'bg-success' : 'bg-danger'}">${r.status}</span></td>
+                <td>${r.data || ''}</td>
+            `;
+            timelineTable.appendChild(row);
+        });
+
+        data.finalState?.forEach(s => {
+            const col = document.createElement('div');
+            col.className = 'col-md-4 mb-2';
+            col.innerHTML = `
+                <div class="card">
+                    <div class="card-body">
+                        <h6><span class="badge bg-info">${s.node}</span></h6>
+                        <p class="mb-0">${s.title || 'N/A'}</p>
+                    </div>
+                </div>
+            `;
+            finalStateContainer.appendChild(col);
+        });
+    }
+
+    const dirtyReadSpan = document.getElementById('dirtyRead');
+    if (data.dirtyRead !== undefined || (data.sets && data.sets.some(s => s.dirtyRead !== undefined))) {
+        if (data.sets) {
+            const anyDirtyRead = data.sets.some(s => s.dirtyRead);
+            dirtyReadSpan.textContent = anyDirtyRead ? 'YES ⚠️' : 'NO ✓';
+        } else {
+            dirtyReadSpan.textContent = data.dirtyRead ? 'YES ⚠️' : 'NO ✓';
+        }
+        dirtyReadSpan.parentElement.style.display = 'block';
+    } else {
+        dirtyReadSpan.parentElement.style.display = 'none';
+    }
+}
+
+async function runAllCases() {
+    const isolation = document.getElementById('isolationLevel').value;
+    document.getElementById('comparisonContainer').style.display = 'none';
+    
+    for (let i = 1; i <= 3; i++) {
+        await runCase(i);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Delay between tests
+    }
+    
+    // Show comparison
+    updateComparison();
+}
+
+function updateComparison() {
+    const comparisonContainer = document.getElementById('comparisonContainer');
+    const comparisonTable = document.getElementById('comparisonTable');
+    
+    if (Object.keys(comparisonData).length === 0) return;
+    
+    comparisonContainer.style.display = 'block';
+    comparisonTable.innerHTML = '';
+    
+    Object.keys(comparisonData).forEach(isolation => {
+        const cases = comparisonData[isolation];
+        const row = `<tr>
+            <td><strong>${isolation}</strong></td>
+            <td>${cases.case1 ? (cases.case1.consistency ? '✓ Consistent' : '✗ Inconsistent') : 'Not tested'}</td>
+            <td>${cases.case2 ? (cases.case2.consistency ? '✓ Consistent' : '✗ Inconsistent') + (cases.case2.dirtyRead ? ' (Dirty Read)' : '') : 'Not tested'}</td>
+            <td>${cases.case3 ? (cases.case3.consistency ? '✓ Consistent' : '✗ Inconsistent') : 'Not tested'}</td>
+            <td>${getPerformanceRating(isolation)}</td>
+        </tr>`;
+        comparisonTable.insertAdjacentHTML('beforeend', row);
+    });
+    
+    document.getElementById('recommendation').textContent = getRecommendation();
+}
+
+function getPerformanceRating(isolation) {
+    const ratings = {
+        'READ_UNCOMMITTED': '⚡⚡⚡⚡ (Highest)',
+        'READ_COMMITTED': '⚡⚡⚡ (High)',
+        'REPEATABLE_READ': '⚡⚡ (Medium)',
+        'SERIALIZABLE': '⚡ (Lowest)'
+    };
+    return ratings[isolation] || 'Unknown';
+}
+
+function getRecommendation() {
+    // Based on testing, recommend the highest throughput level that maintains consistency
+    const levels = ['READ_UNCOMMITTED', 'READ_COMMITTED', 'REPEATABLE_READ', 'SERIALIZABLE'];
+    
+    for (const level of levels) {
+        const data = comparisonData[level];
+        if (data && data.case1 && data.case2 && data.case3) {
+            if (data.case1.consistency && data.case2.consistency && data.case3.consistency && !data.case2.dirtyRead) {
+                return `Use ${level} - provides consistency while allowing good concurrency.`;
+            }
+        }
+    }
+    
+    return 'Run all test cases with different isolation levels to get a recommendation.';
 }
 
 document.getElementById('case1').addEventListener('click', () => runCase(1));
 document.getElementById('case2').addEventListener('click', () => runCase(2));
 document.getElementById('case3').addEventListener('click', () => runCase(3));
-document.getElementById('checkStatus').addEventListener('click', checkServerStatus);
-document.getElementById('stopSim').addEventListener('click', stopSimulation);
+document.getElementById('runAll').addEventListener('click', runAllCases);
 </script>

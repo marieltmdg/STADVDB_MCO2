@@ -1,351 +1,556 @@
 const express = require('express');
 const router = express.Router();
-const { IsolationLevel, acquireLock, releaseLock } = require('../concurrency');
-const Movie = require('../models/movie');
-const { begin_transaction, commit, rollback, read, write } = require('../models/concurrency_model');
+const { pools } = require('../dbPools');
+const { replicateOperation } = require('../replication');
+const RecoveryLog = require('../models/recoveryLog');
 
-// GET /api/simulate?case=1&isolation=READ_COMMITTED
+// Map isolation level names to MySQL syntax
+const isolationLevelMap = {
+  'READ_UNCOMMITTED': 'READ UNCOMMITTED',
+  'READ_COMMITTED': 'READ COMMITTED',
+  'REPEATABLE_READ': 'REPEATABLE READ',
+  'SERIALIZABLE': 'SERIALIZABLE'
+};
+
+// Helper to set isolation level for a connection
+async function setIsolationLevel(connection, level) {
+  const mysqlLevel = isolationLevelMap[level] || 'REPEATABLE READ';
+  // Use SET TRANSACTION instead of SET SESSION - applies to the next transaction only
+  await connection.query(`SET TRANSACTION ISOLATION LEVEL ${mysqlLevel}`);
+}
+
+// Helper to get test movie IDs (one even, one odd)
+async function getTestMovieIds() {
+  try {
+    const [evenRows] = await pools.node1.query('SELECT id FROM title_basics WHERE id % 2 = 0 LIMIT 1');
+    const [oddRows] = await pools.node1.query('SELECT id FROM title_basics WHERE id % 2 = 1 LIMIT 1');
+    
+    return {
+      even: evenRows[0]?.id || 2,
+      odd: oddRows[0]?.id || 1
+    };
+  } catch (err) {
+    return { even: 2, odd: 1 }; // fallback
+  }
+}
+
+// Case 1: Concurrent reads on the same row from nodes
+async function runCase1(isolationLevel) {
+  const testIds = await getTestMovieIds();
+  const allResults = [];
+
+  // Run test for EVEN ID (node1 + node2)
+  const evenResults = await runCase1SingleTest(testIds.even, isolationLevel, ['node1', 'node2'], 'EVEN');
+  allResults.push(evenResults);
+
+  // Run test for ODD ID (node1 + node3)
+  const oddResults = await runCase1SingleTest(testIds.odd, isolationLevel, ['node1', 'node3'], 'ODD');
+  allResults.push(oddResults);
+
+  return {
+    success: true,
+    case: 1,
+    isolationLevel,
+    sets: allResults,
+    overallConsistency: allResults.every(r => r.consistency)
+  };
+}
+
+async function runCase1SingleTest(movieId, isolationLevel, nodes, setType) {
+  const results = [];
+  const startTime = Date.now();
+
+  try {
+    // Get connections for the specified nodes only
+    const connections = {};
+    for (const node of nodes) {
+      connections[node] = await pools[node].getConnection();
+    }
+
+    try {
+      // Set isolation level for all connections
+      await Promise.all(
+        Object.values(connections).map(conn => setIsolationLevel(conn, isolationLevel))
+      );
+
+      // Begin transactions
+      await Promise.all(
+        Object.values(connections).map(conn => conn.beginTransaction())
+      );
+
+      nodes.forEach(node => {
+        results.push({ node, operation: 'START TRANSACTION', status: 'Success', timestamp: Date.now() - startTime });
+      });
+
+      // Concurrent reads
+      const readPromises = nodes.map(node =>
+        connections[node].query('SELECT * FROM title_basics WHERE id = ?', [movieId]).then(([rows]) => ({
+          node,
+          data: rows[0],
+          timestamp: Date.now() - startTime
+        }))
+      );
+
+      const readResults = await Promise.all(readPromises);
+      
+      readResults.forEach(result => {
+        results.push({
+          node: result.node,
+          operation: `READ id=${movieId}`,
+          status: 'Success',
+          data: result.data?.primaryTitle || 'N/A',
+          timestamp: result.timestamp
+        });
+      });
+
+      // Commit all transactions
+      await Promise.all(
+        Object.values(connections).map(conn => conn.commit())
+      );
+
+      nodes.forEach(node => {
+        results.push({ node, operation: 'COMMIT', status: 'Success', timestamp: Date.now() - startTime });
+      });
+
+      return {
+        setType,
+        movieId,
+        nodes,
+        results,
+        consistency: readResults.every(r => r.data?.primaryTitle === readResults[0].data?.primaryTitle),
+        finalState: readResults.map(r => ({ node: r.node, title: r.data?.primaryTitle }))
+      };
+
+    } finally {
+      Object.values(connections).forEach(conn => conn.release());
+    }
+  } catch (err) {
+    return {
+      setType,
+      movieId,
+      nodes,
+      error: err.message,
+      results
+    };
+  }
+}
+
+// Case 2: One write with replication happening concurrently with reads
+async function runCase2(isolationLevel) {
+  const testIds = await getTestMovieIds();
+  const allResults = [];
+
+  // Run test for EVEN ID (node1 writes, replicates to node2, node2 reads during replication)
+  const evenResults = await runCase2SingleTest(testIds.even, isolationLevel, 'node1', 'node2', 'EVEN');
+  allResults.push(evenResults);
+
+  // Run test for ODD ID (node1 writes, replicates to node3, node3 reads during replication)
+  const oddResults = await runCase2SingleTest(testIds.odd, isolationLevel, 'node1', 'node3', 'ODD');
+  allResults.push(oddResults);
+
+  return {
+    success: true,
+    case: 2,
+    isolationLevel,
+    sets: allResults,
+    overallConsistency: allResults.every(r => r.consistency)
+  };
+}
+
+async function runCase2SingleTest(movieId, isolationLevel, sourceNode, targetNode, setType) {
+  const results = [];
+  const startTime = Date.now();
+  const testTitle = `Test_${setType}_${Date.now()}`;
+
+  try {
+    const connSource = await pools[sourceNode].getConnection();
+    const connTarget = await pools[targetNode].getConnection();
+
+    try {
+      // Get original value
+      const [originalRows] = await connSource.query('SELECT * FROM title_basics WHERE id = ?', [movieId]);
+      const originalData = originalRows[0];
+      const originalTitle = originalData?.primaryTitle;
+
+      // Track which nodes have committed writes
+      let sourceCommitted = false;
+      let targetCommitted = false;
+      let readData = undefined; // Track read data for dirty read detection
+
+      // Set isolation level
+      await setIsolationLevel(connSource, isolationLevel);
+      await setIsolationLevel(connTarget, isolationLevel);
+
+      // Source node begins transaction and writes
+      await connSource.beginTransaction();
+      results.push({ node: sourceNode, operation: 'START TRANSACTION', status: 'Success', timestamp: Date.now() - startTime });
+
+      await connSource.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [testTitle, movieId]);
+      results.push({
+        node: sourceNode,
+        operation: `WRITE id=${movieId}`,
+        status: 'Success',
+        data: testTitle,
+        timestamp: Date.now() - startTime
+      });
+
+      await connSource.commit();
+      sourceCommitted = true;
+      results.push({ node: sourceNode, operation: 'COMMIT', status: 'Success', timestamp: Date.now() - startTime });
+
+      // Simulate concurrent replication and read on target node
+      // Create a separate connection for replication to simulate concurrent transactions
+      const connReplication = await pools[targetNode].getConnection();
+      
+      try {
+        await setIsolationLevel(connReplication, isolationLevel);
+        await setIsolationLevel(connTarget, isolationLevel);
+
+        // Start replication transaction first
+        await connReplication.beginTransaction();
+        results.push({ node: targetNode, operation: 'START REPLICATION TX', status: 'Success', timestamp: Date.now() - startTime });
+
+        // Replication write
+        await connReplication.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [testTitle, movieId]);
+        results.push({
+          node: targetNode,
+          operation: `REPLICATION WRITE id=${movieId}`,
+          status: 'Success',
+          data: testTitle,
+          timestamp: Date.now() - startTime
+        });
+
+        // Start read transaction while replication hasn't committed yet
+        await connTarget.beginTransaction();
+        results.push({ node: targetNode, operation: 'START READ TX', status: 'Success', timestamp: Date.now() - startTime });
+
+        // Run read and commit simultaneously - let MySQL handle the isolation
+        const readPromise = (async () => {
+          const [rows] = await connTarget.query('SELECT primaryTitle FROM title_basics WHERE id = ?', [movieId]);
+          return {
+            success: true,
+            data: rows[0]?.primaryTitle,
+            timestamp: Date.now() - startTime
+          };
+        })();
+
+        const replicationCommitPromise = (async () => {
+          await connReplication.commit();
+          return { committed: true, timestamp: Date.now() - startTime };
+        })();
+
+        // Let MySQL handle the isolation - no timeout, no delays
+        const [readResult, replCommitResult] = await Promise.all([readPromise, replicationCommitPromise]);
+
+        targetCommitted = replCommitResult.committed;
+
+        results.push({
+          node: targetNode,
+          operation: `READ id=${movieId}`,
+          status: readResult.success ? 'Success' : 'Failed',
+          data: readResult.data || readResult.error,
+          timestamp: readResult.timestamp
+        });
+
+        readData = readResult.data; // Store for later use
+
+        results.push({ 
+          node: targetNode, 
+          operation: 'COMMIT REPLICATION', 
+          status: 'Success', 
+          timestamp: replCommitResult.timestamp 
+        });
+
+        // Commit read transaction
+        await connTarget.commit();
+        results.push({ node: targetNode, operation: 'COMMIT READ', status: 'Success', timestamp: Date.now() - startTime });
+
+        connReplication.release();
+
+      } catch (timeoutErr) {
+        // Handle timeout or deadlock
+        results.push({
+          node: targetNode,
+          operation: 'ERROR',
+          status: 'Timeout/Deadlock',
+          data: timeoutErr.message,
+          timestamp: Date.now() - startTime
+        });
+        
+        try { await connReplication.rollback(); } catch (e) {}
+        try { await connTarget.rollback(); } catch (e) {}
+        connReplication.release();
+      }
+
+      // Wait for any pending operations
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Check final state
+      const [finalSource] = await connSource.query('SELECT primaryTitle FROM title_basics WHERE id = ?', [movieId]);
+      const [finalTarget] = await connTarget.query('SELECT primaryTitle FROM title_basics WHERE id = ?', [movieId]);
+
+      const finalState = [
+        { node: sourceNode, title: finalSource[0]?.primaryTitle },
+        { node: targetNode, title: finalTarget[0]?.primaryTitle }
+      ];
+
+      // Restore original value on nodes that committed writes
+      const restorePromises = [];
+      if (sourceCommitted) {
+        restorePromises.push(connSource.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [originalTitle, movieId]));
+      }
+      if (targetCommitted) {
+        restorePromises.push(connTarget.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [originalTitle, movieId]));
+      }
+      if (restorePromises.length > 0) {
+        await Promise.all(restorePromises).catch(err => console.error('Restore failed:', err.message));
+      }
+
+      // Detect dirty read: read must match testTitle AND read must happen before replication commit
+      const readTimestamp = results.find(r => r.operation.startsWith('READ'))?.timestamp || Infinity;
+      const commitTimestamp = results.find(r => r.operation === 'COMMIT REPLICATION')?.timestamp || 0;
+      const isDirtyRead = readData === testTitle && readTimestamp < commitTimestamp;
+
+      return {
+        setType,
+        movieId,
+        nodes: [sourceNode, targetNode],
+        results,
+        dirtyRead: isDirtyRead, // Dirty read only if read happened before commit
+        consistency: finalState[0].title === finalState[1].title,
+        finalState
+      };
+
+    } finally {
+      connSource.release();
+      connTarget.release();
+    }
+  } catch (err) {
+    return {
+      setType,
+      movieId,
+      nodes: [sourceNode, targetNode],
+      error: err.message,
+      results
+    };
+  }
+}
+
+// Case 3: Concurrent writes - one node writing while another replicates to it
+async function runCase3(isolationLevel) {
+  const testIds = await getTestMovieIds();
+  const allResults = [];
+
+  // Run test for EVEN ID (node1 and node2)
+  const evenResults = await runCase3SingleTest(testIds.even, isolationLevel, 'node1', 'node2', 'EVEN');
+  allResults.push(evenResults);
+
+  // Run test for ODD ID (node1 and node3)
+  const oddResults = await runCase3SingleTest(testIds.odd, isolationLevel, 'node1', 'node3', 'ODD');
+  allResults.push(oddResults);
+
+  return {
+    success: true,
+    case: 3,
+    isolationLevel,
+    sets: allResults,
+    overallConsistency: allResults.every(r => r.consistency)
+  };
+}
+
+async function runCase3SingleTest(movieId, isolationLevel, node1Name, node2Name, setType) {
+  const results = [];
+  const startTime = Date.now();
+  const timestamp = Date.now();
+  let node1Committed = false;
+  let node2Committed = false;
+
+  try {
+    const conn1 = await pools[node1Name].getConnection();
+    const conn2 = await pools[node2Name].getConnection();
+    const connReplication = await pools[node2Name].getConnection(); // Separate connection for replication
+
+    try {
+      // Get original value
+      const [originalRows] = await conn1.query('SELECT * FROM title_basics WHERE id = ?', [movieId]);
+      const originalTitle = originalRows[0]?.primaryTitle;
+
+      // Set isolation level
+      await setIsolationLevel(conn1, isolationLevel);
+      await setIsolationLevel(conn2, isolationLevel);
+      await setIsolationLevel(connReplication, isolationLevel);
+
+      // Step 1: Node1 writes and commits
+      await conn1.beginTransaction();
+      results.push({ node: node1Name, operation: 'START TRANSACTION', status: 'Success', timestamp: Date.now() - startTime });
+
+      const node1Title = `${node1Name.toUpperCase()}_${setType}_${timestamp}`;
+      await conn1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [node1Title, movieId]);
+      results.push({
+        node: node1Name,
+        operation: `WRITE id=${movieId}`,
+        status: 'Success',
+        data: node1Title,
+        timestamp: Date.now() - startTime
+      });
+
+      await conn1.commit();
+      node1Committed = true;
+      results.push({ node: node1Name, operation: 'COMMIT', status: 'Success', timestamp: Date.now() - startTime });
+
+      // Step 2: Simulate concurrent replication and local write on node2
+      try {
+        // Start replication transaction
+        await connReplication.beginTransaction();
+        results.push({ node: node2Name, operation: 'START REPLICATION TX', status: 'Success', timestamp: Date.now() - startTime });
+
+        // Replication write
+        await connReplication.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [node1Title, movieId]);
+        results.push({
+          node: node2Name,
+          operation: `REPLICATION WRITE id=${movieId}`,
+          status: 'Success',
+          data: node1Title,
+          timestamp: Date.now() - startTime
+        });
+
+        // Start local write transaction on node2 (concurrent with replication)
+        await conn2.beginTransaction();
+        results.push({ node: node2Name, operation: 'START LOCAL WRITE TX', status: 'Success', timestamp: Date.now() - startTime });
+
+        // Run replication commit and local write simultaneously
+        const node2Title = `${node2Name.toUpperCase()}_${setType}_${timestamp}`;
+        
+        const replicationCommitPromise = (async () => {
+          await connReplication.commit();
+          return { committed: true, timestamp: Date.now() - startTime };
+        })();
+
+        const localWritePromise = (async () => {
+          await conn2.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [node2Title, movieId]);
+          return { 
+            success: true, 
+            data: node2Title,
+            timestamp: Date.now() - startTime 
+          };
+        })();
+
+        const [replCommitResult, writeResult] = await Promise.all([replicationCommitPromise, localWritePromise]);
+
+        results.push({ 
+          node: node2Name, 
+          operation: 'COMMIT REPLICATION', 
+          status: 'Success', 
+          timestamp: replCommitResult.timestamp 
+        });
+
+        results.push({
+          node: node2Name,
+          operation: `LOCAL WRITE id=${movieId}`,
+          status: writeResult.success ? 'Success' : 'Failed',
+          data: writeResult.data,
+          timestamp: writeResult.timestamp
+        });
+
+        // Commit local write
+        await conn2.commit();
+        node2Committed = true;
+        results.push({ node: node2Name, operation: 'COMMIT LOCAL WRITE', status: 'Success', timestamp: Date.now() - startTime });
+
+        connReplication.release();
+
+      } catch (conflictErr) {
+        // Handle write conflict or deadlock
+        results.push({
+          node: node2Name,
+          operation: 'ERROR',
+          status: 'Conflict/Deadlock',
+          data: conflictErr.message,
+          timestamp: Date.now() - startTime
+        });
+        
+        try { await connReplication.rollback(); } catch (e) {}
+        try { await conn2.rollback(); } catch (e) {}
+        connReplication.release();
+      }
+
+      // Wait for any pending operations
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Check final state from both nodes
+      const [final1] = await conn1.query('SELECT primaryTitle FROM title_basics WHERE id = ?', [movieId]);
+      const [final2] = await conn2.query('SELECT primaryTitle FROM title_basics WHERE id = ?', [movieId]);
+
+      const finalState = [
+        { node: node1Name, title: final1[0]?.primaryTitle },
+        { node: node2Name, title: final2[0]?.primaryTitle }
+      ];
+
+      // Restore original value on nodes that successfully committed
+      const restorePromises = [];
+      if (node1Committed) {
+        restorePromises.push(conn1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [originalTitle, movieId]));
+      }
+      if (node2Committed) {
+        restorePromises.push(conn2.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [originalTitle, movieId]));
+      }
+      if (restorePromises.length > 0) {
+        await Promise.all(restorePromises).catch(err => console.error('Restore failed:', err.message));
+      }
+
+      return {
+        setType,
+        movieId,
+        nodes: [node1Name, node2Name],
+        results,
+        consistency: finalState[0].title === finalState[1].title,
+        finalState,
+        winner: finalState[0].title
+      };
+
+    } finally {
+      conn1.release();
+      conn2.release();
+    }
+  } catch (err) {
+    return {
+      setType,
+      movieId,
+      nodes: [node1Name, node2Name],
+      error: err.message,
+      results
+    };
+  }
+}
+
+// Main simulation endpoint
 router.get('/simulate', async (req, res) => {
   const caseNum = parseInt(req.query.case) || 1;
   const isolationLevel = req.query.isolation || 'READ_COMMITTED';
-  
-  console.log(`[SIMULATION] Running Case ${caseNum} with isolation level: ${isolationLevel}`);
-  
+
+  console.log(`[SIMULATION] Running Case ${caseNum} with ${isolationLevel}`);
+
   try {
-    let nodeStates = [];
-    let replicationLog = [];
-    
-    switch(caseNum) {
-      case 1: // Concurrent reads
-        const case1Result = await runConcurrencyCase1(isolationLevel);
-        nodeStates = case1Result.nodeStates;
-        replicationLog = case1Result.replicationLog;
+    let result;
+    switch (caseNum) {
+      case 1:
+        result = await runCase1(isolationLevel);
         break;
-      case 2: // Read-Write
-        const case2Result = await runConcurrencyCase2(isolationLevel);
-        nodeStates = case2Result.nodeStates;
-        replicationLog = case2Result.replicationLog;
+      case 2:
+        result = await runCase2(isolationLevel);
         break;
-      case 3: // Concurrent writes
-        const case3Result = await runConcurrencyCase3(isolationLevel);
-        nodeStates = case3Result.nodeStates;
-        replicationLog = case3Result.replicationLog;
+      case 3:
+        result = await runCase3(isolationLevel);
         break;
       default:
-        throw new Error('Invalid case number');
+        return res.status(400).json({ error: 'Invalid case number' });
     }
-    
-    res.json({ nodeStates, replicationLog });
-  } catch (error) {
-    console.error('[SIMULATION ERROR]', error);
-    res.status(500).json({ error: error.message });
+
+    res.json(result);
+  } catch (err) {
+    console.error('[SIMULATION] Error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
-
-// Real concurrency test implementations using actual database operations
-async function runConcurrencyCase1(isolationLevel) {
-  const testId = '135244'; // Even ID - belongs to node2
-  const txId = Date.now();
-  let replicationLog = [];
-  
-  console.log(`[CASE 1] Starting concurrent reads on testId: ${testId} (even - node2 owner) with isolation: ${isolationLevel}`);
-  
-  try {
-    // Acquire read locks for all nodes
-    console.log(`[CASE 1] Acquiring read locks for concurrent reads...`);
-    const lock1 = acquireLock(testId, 'read', `tx${txId}_1`);
-    const lock2 = acquireLock(testId, 'read', `tx${txId}_2`);
-    
-    if (!lock1 || !lock2) {
-      console.log(`[CASE 1] Failed to acquire locks: lock1=${lock1}, lock2=${lock2}`);
-      releaseLock(testId, `tx${txId}_1`);
-      releaseLock(testId, `tx${txId}_2`);
-      throw new Error('Failed to acquire read locks');
-    }
-    
-    console.log(`[CASE 1] Read locks acquired successfully`);
-    console.log(`[CASE 1] Beginning transactions on all nodes for concurrent reads`);
-    const conn1 = await begin_transaction('node1', isolationLevel); // Central node
-    const conn2 = await begin_transaction('node2', isolationLevel); // Even fragment (owns the data)
-    
-    console.log(`[CASE 1] Starting concurrent reads from all nodes...`);
-    const [result1, result2] = await Promise.all([
-      read(conn1, testId),
-      read(conn2, testId)
-    ]);
-    
-    console.log(`[CASE 1] Node1 read result:`, result1);
-    console.log(`[CASE 1] Node2 read result:`, result2);
-    
-    console.log(`[CASE 1] Committing transactions...`);
-    await Promise.all([commit(conn1), commit(conn2)]);
-    
-    // Release locks after successful completion
-    console.log(`[CASE 1] Releasing read locks...`);
-    releaseLock(testId, `tx${txId}_1`);
-    releaseLock(testId, `tx${txId}_2`);
-    
-    replicationLog = [
-      { transactionId: `READ_TX${txId}_1`, operation: 'READ', node: 'Node1', status: result1 ? 'SUCCESS' : 'NO_DATA' },
-      { transactionId: `READ_TX${txId}_2`, operation: 'READ', node: 'Node2', status: result2 ? 'SUCCESS' : 'NO_DATA' }
-    ];
-    
-    console.log(`[CASE 1] Case 1 completed successfully`);
-    console.log(`[CASE 1] Replication log:`, replicationLog);
-    
-    return {
-      nodeStates: [
-        { nodeId: 'node1', status: result1 ? 'Read successful' : 'Read failed - no data', result: result1 },
-        { nodeId: 'node2', status: result2 ? 'Read successful' : 'Read failed - no data', result: result2 },
-      ],
-      replicationLog
-    };
-  } catch (error) {
-    console.error(`[CASE 1] Error occurred:`, error);
-    
-    // Release any acquired locks on error
-    releaseLock(testId, `tx${txId}_1`);
-    releaseLock(testId, `tx${txId}_2`);
-    
-    replicationLog = [
-      { transactionId: `READ_TX${txId}_1`, operation: 'READ', node: 'Node1', status: 'ERROR' },
-      { transactionId: `READ_TX${txId}_2`, operation: 'read', node: 'Node2', status: 'ERROR' }
-    ];
-    
-    console.log(`[CASE 1] Returning error state with replication log:`, replicationLog);
-    
-    return {
-      nodeStates: [
-        { nodeId: 'node1', status: 'Read error: ' + error.message, result: null },
-        { nodeId: 'node2', status: 'Read error: ' + error.message, result: null },
-      ],
-      replicationLog
-    };
-  }
-}
-
-async function runConcurrencyCase2(isolationLevel) {
-  const testId = '135243'; // Odd ID - belongs to node3
-  const txId = Date.now();
-  let replicationLog = [];
-  
-  console.log(`[CASE 2] Starting read-write operations on testId: ${testId} (odd - node3) with isolation: ${isolationLevel}`);
-  
-  try {
-    // Acquire locks: read locks for node1 & node2, write lock for node3
-    console.log(`[CASE 2] Acquiring locks: read locks for node1&2, write lock for node3...`);
-    const readLock1 = acquireLock(testId, 'read', `tx${txId}_1`);
-    const readLock2 = acquireLock(testId, 'read', `tx${txId}_2`);
-    const writeLock3 = acquireLock(testId, 'write', `tx${txId}_3`);
-    
-    // Check if write lock conflicts with read locks
-    if (!readLock1 || !readLock2 || !writeLock3) {
-      console.log(`[CASE 2] Lock conflict detected: read1=${readLock1}, read2=${readLock2}, write3=${writeLock3}`);
-      releaseLock(testId, `tx${txId}_1`);
-      releaseLock(testId, `tx${txId}_2`);
-      releaseLock(testId, `tx${txId}_3`);
-      
-      // Simulate lock conflict behavior
-      return {
-        nodeStates: [
-          { nodeId: 'node1', status: readLock1 ? 'Read completed' : 'Read blocked by write lock', result: null },
-          { nodeId: 'node2', status: readLock2 ? 'Read completed' : 'Read blocked by write lock', result: null },
-          { nodeId: 'node3', status: writeLock3 ? 'Write committed' : 'Write blocked by read locks', result: null }
-        ],
-        replicationLog: [
-          { transactionId: `READ_TX${txId}_1`, operation: 'read', node: 'Node1', status: readLock1 ? 'SUCCESS' : 'BLOCKED' },
-          { transactionId: `READ_TX${txId}_2`, operation: 'read', node: 'Node2', status: readLock2 ? 'SUCCESS' : 'BLOCKED' },
-          { transactionId: `WRITE_TX${txId}_3`, operation: 'UPDATE', node: 'Node3', status: writeLock3 ? 'SUCCESS' : 'BLOCKED' }
-        ]
-      };
-    }
-    
-    console.log(`[CASE 2] All locks acquired successfully`);
-    console.log(`[CASE 2] Beginning transactions: node3 will write, node1 and node2 will read`);
-    const conn1 = await begin_transaction('node1', isolationLevel); // Central node reading
-    const conn2 = await begin_transaction('node2', isolationLevel); // Even fragment reading
-    const conn3 = await begin_transaction('node3', isolationLevel); // Odd fragment writing
-    
-    console.log(`[CASE 2] Starting write on node3 and concurrent reads on node1 and node2...`);
-    const [read1, read2, write3] = await Promise.allSettled([
-      read(conn1, testId),  // Central node reads
-      read(conn2, testId),  // Even fragment reads (cross-fragment read)
-      write(conn3, testId, 'Updated by Node 3 (owner)') // Odd fragment writes (owns the data)
-    ]);
-    
-    console.log(`[CASE 2] Node1 read result:`, read1);
-    console.log(`[CASE 2] Node2 read result:`, read2);
-    console.log(`[CASE 2] Node3 write result:`, write3);
-    
-    console.log(`[CASE 2] Committing transactions...`);
-    await Promise.allSettled([commit(conn1), commit(conn2), commit(conn3)]);
-    
-    // Release locks after completion
-    console.log(`[CASE 2] Releasing locks...`);
-    releaseLock(testId, `tx${txId}_1`);
-    releaseLock(testId, `tx${txId}_2`);
-    releaseLock(testId, `tx${txId}_3`);
-    
-    replicationLog = [
-      { transactionId: `READ_TX${txId}_1`, operation: 'READ', node: 'Node1', status: read1.status === 'fulfilled' ? 'SUCCESS' : 'BLOCKED' },
-      { transactionId: `READ_TX${txId}_2`, operation: 'READ', node: 'Node2', status: read2.status === 'fulfilled' ? 'SUCCESS' : 'BLOCKED' },
-      { transactionId: `WRITE_TX${txId}_3`, operation: 'UPDATE', node: 'Node3', status: write3.status === 'fulfilled' ? 'SUCCESS' : 'FAILED' }
-    ];
-    
-    console.log(`[CASE 2] Case 2 completed`);
-    console.log(`[CASE 2] Replication log:`, replicationLog);
-    
-    return {
-      nodeStates: [
-        { nodeId: 'node1', status: read1.status === 'fulfilled' ? 'Read completed' : 'Read blocked', result: read1.status === 'fulfilled' ? read1.value : null },
-        { nodeId: 'node2', status: read2.status === 'fulfilled' ? 'Read completed' : 'Read blocked', result: read2.status === 'fulfilled' ? read2.value : null },
-        { nodeId: 'node3', status: write3.status === 'fulfilled' ? 'Write committed' : 'Write failed', result: write3.status === 'fulfilled' ? 'Updated by Node 3 (owner)' : null }
-      ],
-      replicationLog
-    };
-  } catch (error) {
-    console.error(`[CASE 2] Error occurred:`, error);
-    
-    // Release any acquired locks on error
-    releaseLock(testId, `tx${txId}_1`);
-    releaseLock(testId, `tx${txId}_2`);
-    releaseLock(testId, `tx${txId}_3`);
-    
-    replicationLog = [
-      { transactionId: `READ_TX${txId}_1`, operation: 'read', node: 'Node1', status: 'ERROR' },
-      { transactionId: `READ_TX${txId}_2`, operation: 'read', node: 'Node2', status: 'ERROR' },
-      { transactionId: `WRITE_TX${txId}_3`, operation: 'UPDATE', node: 'Node3', status: 'ERROR' }
-    ];
-    
-    console.log(`[CASE 2] Returning error state with replication log:`, replicationLog);
-    
-    return {
-      nodeStates: [
-        { nodeId: 'node1', status: 'Transaction error', result: null },
-        { nodeId: 'node2', status: 'Transaction error', result: null },
-        { nodeId: 'node3', status: 'Transaction error', result: null }
-      ],
-      replicationLog
-    };
-  }
-}
-
-async function runConcurrencyCase3(isolationLevel) {
-  const testId = '135243'; // Odd ID - belongs to node3 primarily
-  const txId = Date.now();
-  let replicationLog = [];
-  
-  console.log(`[CASE 3] Starting concurrent writes on testId: ${testId} (odd - node3 owner) with isolation: ${isolationLevel}`);
-  
-  try {
-    // Try to acquire write locks for both nodes (should conflict)
-    console.log(`[CASE 3] Attempting to acquire write locks for concurrent writes...`);
-    const writeLock1 = acquireLock(testId, 'write', `tx${txId}_1`);
-    const writeLock3 = acquireLock(testId, 'write', `tx${txId}_3`);
-    
-    console.log(`[CASE 3] Lock acquisition results: node1=${writeLock1}, node3=${writeLock3}`);
-    
-    // Only one write lock should succeed
-    let winner = null;
-    let loser = null;
-    
-    if (writeLock1 && !writeLock3) {
-      winner = { node: 'node1', txId: `tx${txId}_1`, msg: 'Updated by Node 1 (central)' };
-      loser = { node: 'node3', txId: `tx${txId}_3` };
-    } else if (!writeLock1 && writeLock3) {
-      winner = { node: 'node3', txId: `tx${txId}_3`, msg: 'Updated by Node 3 (odd fragment - owner)' };
-      loser = { node: 'node1', txId: `tx${txId}_1` };
-    } else if (writeLock1 && writeLock3) {
-      // Should not happen with proper exclusive locking, but handle it
-      console.log(`[CASE 3] WARNING: Both write locks acquired - this indicates a locking bug`);
-      winner = { node: 'node1', txId: `tx${txId}_1`, msg: 'Updated by Node 1 (central)' };
-      loser = { node: 'node3', txId: `tx${txId}_3` };
-      releaseLock(testId, `tx${txId}_3`); // Release the second lock
-    } else {
-      // Neither lock acquired - very unusual
-      throw new Error('Failed to acquire any write locks');
-    }
-    
-    console.log(`[CASE 3] Lock conflict resolved: ${winner.node} wins, ${loser.node} blocked`);
-    console.log(`[CASE 3] Beginning transaction for winner: ${winner.node}`);
-    
-    let writeResult = null;
-    if (winner.node === 'node1') {
-      const conn1 = await begin_transaction('node1', isolationLevel);
-      await write(conn1, testId, winner.msg);
-      await commit(conn1);
-      writeResult = { node: 'node1', success: true, message: winner.msg };
-    } else {
-      const conn3 = await begin_transaction('node3', isolationLevel);
-      await write(conn3, testId, winner.msg);
-      await commit(conn3);
-      writeResult = { node: 'node3', success: true, message: winner.msg };
-    }
-    
-    console.log(`[CASE 3] Write completed by ${writeResult.node}`);
-    
-    // Release the winning lock
-    releaseLock(testId, winner.txId);
-    
-    
-    replicationLog = [
-      { 
-        transactionId: `WRITE_TX${txId}_1`, 
-        operation: 'UPDATE', 
-        node: 'Node1', 
-        status: writeResult.node === 'node1' ? 'SUCCESS' : 'BLOCKED' 
-      },
-      { 
-        transactionId: `WRITE_TX${txId}_3`, 
-        operation: 'UPDATE', 
-        node: 'Node3', 
-        status: writeResult.node === 'node3' ? 'SUCCESS' : 'BLOCKED' 
-      }
-    ];
-    
-    console.log(`[CASE 3] Case 3 completed`);
-    console.log(`[CASE 3] Replication log:`, replicationLog);
-    
-    return {
-      nodeStates: [
-        { 
-          nodeId: 'node1', 
-          status: writeResult.node === 'node1' ? 'Write committed' : 'Write blocked by lock conflict', 
-          result: writeResult.node === 'node1' ? writeResult.message : 'Blocked by node3 write lock' 
-        },
-        { nodeId: 'node2', status: 'Idle', result: null },
-        { 
-          nodeId: 'node3', 
-          status: writeResult.node === 'node3' ? 'Write committed' : 'Write blocked by lock conflict', 
-          result: writeResult.node === 'node3' ? writeResult.message : 'Blocked by node1 write lock' 
-        }
-      ],
-      replicationLog
-    };
-  } catch (error) {
-    console.error(`[CASE 3] Error occurred:`, error);
-    
-    // Release any acquired locks on error
-    releaseLock(testId, `tx${txId}_1`);
-    releaseLock(testId, `tx${txId}_3`);
-    
-    replicationLog = [
-      { transactionId: `WRITE_TX${txId}_1`, operation: 'UPDATE', node: 'Node1', status: 'ERROR' },
-      { transactionId: `WRITE_TX${txId}_3`, operation: 'UPDATE', node: 'Node3', status: 'ERROR' }
-    ];
-    
-    console.log(`[CASE 3] Returning error state with replication log:`, replicationLog);
-    
-    return {
-      nodeStates: [
-        { nodeId: 'node1', status: 'Write error: ' + error.message, result: null },
-        { nodeId: 'node2', status: 'Idle', result: null },
-        { nodeId: 'node3', status: 'Write error: ' + error.message, result: null }
-      ],
-      replicationLog
-    };
-  }
-}
-
 
 module.exports = router;
