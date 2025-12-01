@@ -1,0 +1,201 @@
+<h1>Global Recovery Simulator</h1>
+
+<div class="alert alert-info">
+  <strong>Test Cases:</strong>
+  <ul class="mb-0">
+    <li>Case 1 — Node 2 / Node 3 -> Central write fails.</li>
+    <li>Case 2 — Central recovers and missed writes are replayed.</li>
+    <li>Case 3 — Central -> Node 2 / Node 3 write fails.</li>
+    <li>Case 4 — Node 2 / Node 3 recovers and missed writes are replayed.</li>
+  </ul>
+</div>
+
+<div class="row mb-3">
+  <div class="col-md-8">
+    <div class="btn-group mb-2" role="group" aria-label="recovery-cases">
+      <button id="case1" class="btn btn-primary me-2">Run Case 1</button>
+      <button id="case2" class="btn btn-warning me-2">Run Case 2</button>
+      <button id="case3" class="btn btn-success me-2">Run Case 3</button>
+      <button id="case4" class="btn btn-success me-2">Run Case 4</button>
+    </div>
+    <button id="stopSim" class="btn btn-danger me-2">Stop</button>
+    <button id="checkStatus" class="btn btn-info">Check Server Status</button>
+  </div>
+  <div class="col-md-4 text-end">
+    <small class="text-muted">Tip: run cases in sequence 1→2 or 3→4 to simulate failure/recovery flows.</small>
+  </div>
+</div>
+
+<div id="loadingIndicator" class="alert alert-primary" style="display:none;">
+  <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+  Running simulation...
+</div>
+
+<div id="resultsContainer" style="display:none;">
+  <div class="card mb-4">
+    <div class="card-header">
+      Node States
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-4">
+          <div class="card mb-2">
+            <div class="card-header">Node 1</div>
+            <div class="card-body">
+              <div id="node1State">Idle</div>
+              <small class="text-muted" id="node1Result"></small>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="card mb-2">
+            <div class="card-header">Node 2</div>
+            <div class="card-body">
+              <div id="node2State">Idle</div>
+              <small class="text-muted" id="node2Result"></small>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="card mb-2">
+            <div class="card-header">Node 3</div>
+            <div class="card-body">
+              <div id="node3State">Idle</div>
+              <small class="text-muted" id="node3Result"></small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Replication Log</div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-striped table-hover mb-0">
+          <thead class="table-dark">
+            <tr>
+              <th>Transaction ID</th>
+              <th>Operation</th>
+              <th>Target Node</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="replicationLog"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="comparisonContainer" style="display:none;">
+  <div class="card">
+    <div class="card-header">Comparison / Notes</div>
+    <div class="card-body">
+      <p id="comparisonNotes" class="mb-0">Use this area to compare before/after states or add notes for the run.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+async function runCase(caseNum) {
+  const loadingIndicator = document.getElementById('loadingIndicator');
+  const resultsContainer = document.getElementById('resultsContainer');
+  const comparison = document.getElementById('comparisonContainer');
+
+  // UI reset
+  loadingIndicator.style.display = 'block';
+  resultsContainer.style.display = 'none';
+  comparison.style.display = 'none';
+  ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent='Running...');
+  ['node1Result','node2Result','node3Result'].forEach(id => document.getElementById(id).textContent='');
+  document.getElementById('replicationLog').innerHTML = '';
+
+  let res;
+  try {
+    res = await fetch(`/api/recovery/simulate/recovery?case=${caseNum}`);
+  } catch (err) {
+    loadingIndicator.style.display = 'none';
+    document.getElementById('replicationLog').insertAdjacentHTML('beforeend', `<tr><td colspan="4">Network error: ${err.message}</td></tr>`);
+    return;
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (!res.ok) {
+    const text = await res.text();
+    loadingIndicator.style.display = 'none';
+    document.getElementById('replicationLog').insertAdjacentHTML('beforeend', `<tr><td colspan="4">Server error: ${res.status} ${res.statusText}<pre>${text}</pre></td></tr>`);
+    return;
+  }
+
+  let data;
+  try {
+    data = contentType.includes('application/json') ? await res.json() : null;
+  } catch (err) {
+    const text = await res.text();
+    loadingIndicator.style.display = 'none';
+    document.getElementById('replicationLog').insertAdjacentHTML('beforeend', `<tr><td colspan="4">Invalid JSON response: <pre>${text}</pre></td></tr>`);
+    return;
+  }
+
+  // Defensive handling if response shape differs
+  const nodeStates = Array.isArray(data && data.nodeStates) ? data.nodeStates : [];
+  const logs = Array.isArray(data && data.replicationLog) ? data.replicationLog : [];
+
+  // Populate node states
+  nodeStates.forEach(node => {
+    const stateEl = document.getElementById(node.nodeId + 'State');
+    if (stateEl) stateEl.textContent = node.status || 'Unknown';
+    const resultEl = document.getElementById(node.nodeId + 'Result');
+    if (resultEl) resultEl.textContent = node.result ? (typeof node.result === 'object' ? JSON.stringify(node.result) : String(node.result)) : '';
+  });
+
+  // Fill replication log
+  const logTable = document.getElementById('replicationLog');
+  logs.forEach(log => {
+    const row = `<tr>
+      <td>${log.transactionId || ''}</td>
+      <td>${log.operation || ''}</td>
+      <td>${log.node || ''}</td>
+      <td>${log.status || ''}</td>
+    </tr>`;
+    logTable.insertAdjacentHTML('beforeend', row);
+  });
+
+  // show results
+  loadingIndicator.style.display = 'none';
+  resultsContainer.style.display = 'block';
+  comparison.style.display = 'block';
+}
+
+async function checkServerStatus() {
+  ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent = 'Checking...');
+  try {
+    const res = await fetch('/api/health');
+    const data = await res.json();
+    // default app endpoint; server-side per-node health is better if you add one
+    ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent = data.status || 'Unknown');
+  } catch {
+    ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent = 'Offline');
+  }
+}
+
+let currentSimulation = null;
+function stopSimulation() {
+  if (currentSimulation) currentSimulation.abort();
+  ['node1State','node2State','node3State'].forEach(id => document.getElementById(id).textContent = 'Stopped');
+  ['node1Result','node2Result','node3Result'].forEach(id => document.getElementById(id).textContent = '');
+  document.getElementById('replicationLog').innerHTML = '';
+  document.getElementById('loadingIndicator').style.display = 'none';
+  document.getElementById('resultsContainer').style.display = 'none';
+  document.getElementById('comparisonContainer').style.display = 'none';
+}
+
+document.getElementById('case1').addEventListener('click', () => runCase(1));
+document.getElementById('case2').addEventListener('click', () => runCase(2));
+document.getElementById('case3').addEventListener('click', () => runCase(3));
+document.getElementById('case4').addEventListener('click', () => runCase(4));
+document.getElementById('checkStatus').addEventListener('click', checkServerStatus);
+document.getElementById('stopSim').addEventListener('click', stopSimulation);
+</script>

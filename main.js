@@ -55,6 +55,8 @@ app.set('layout', 'layout');
 // API Routes
 app.use('/api/movies', require('./server/src/routes/movies'));
 app.use('/api', require('./server/src/routes/simulate'));
+app.use('/api/recovery', require('./server/src/routes/simulate_recovery'));
+
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -262,6 +264,16 @@ app.get('/simulate', (req, res) => {
         DB_NODE2_IP: process.env.DB_NODE2_IP,
         DB_NODE3_IP: process.env.DB_NODE3_IP
     });
+});
+
+// Concurrency control simulation page
+app.get('/simulate/recovery', (req, res) => {
+  res.render('simulate_recovery', {
+    title: 'Concurrency & Replication Simulator',
+    DB_NODE1_IP: process.env.DB_NODE1_IP,
+    DB_NODE2_IP: process.env.DB_NODE2_IP,
+    DB_NODE3_IP: process.env.DB_NODE3_IP
+  });
 });
 
 // Error handling middleware (after all routes)
