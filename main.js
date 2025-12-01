@@ -54,13 +54,12 @@ app.set('layout', 'layout');
 
 // API Routes
 app.use('/api/movies', require('./server/src/routes/movies'));
+app.use('/api', require('./server/src/routes/simulate'));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
-
-
 
 // Web Interface Routes
 // Home page - redirect to movies
@@ -255,7 +254,12 @@ app.get('/search', async (req, res) => {
   }
 });
 
-// Error handling middleware
+// Concurrency control simulation page
+app.get('/simulate', (req, res) => {
+    res.render('simulate', { title: 'Concurrency & Replication Simulator' });
+});
+
+// Error handling middleware (after all routes)
 app.use((err, req, res, next) => {
   console.error('Error:', err.message);
   res.status(500).render('error', { 
@@ -264,18 +268,14 @@ app.use((err, req, res, next) => {
   });
 });
 
-
-
-// 404 handler (should be last)
-// Place this after all other routes and middleware
+// 404 handler (last)
 app.use('*', (req, res) => {
   res.status(404).render('404', { title: 'Page Not Found' });
 });
 
 app.listen(PORT, () => {
   console.log(`[INFO] Unified server running on http://localhost:${PORT}`);
-  console.log(`[INFO] - Web interface: http://localhost:${PORT}/movies`);
-  console.log(`[INFO] - API endpoints: http://localhost:${PORT}/api/movies`);
 });
+
 
 module.exports = app;
