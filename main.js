@@ -70,12 +70,28 @@ app.get('/', (req, res) => {
 // Movies list page
 app.get('/movies', async (req, res) => {
   try {
-    const movies = await Movie.getAll(50); // Get first 50 movies
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20; // Movies per page
+    const offset = (page - 1) * limit;
+    
+    const movies = await Movie.getAll(limit, offset);
+    const totalMovies = await Movie.getCount();
+    const totalPages = Math.ceil(totalMovies / limit);
+    
     res.render('movies/index', { 
       movies: movies,
       title: 'Movies Database',
       message: req.query.message,
-      searchQuery: {} // Always pass searchQuery
+      searchQuery: {}, // Always pass searchQuery
+      pagination: {
+        currentPage: page,
+        totalPages: totalPages,
+        totalMovies: totalMovies,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+        nextPage: page + 1,
+        prevPage: page - 1
+      }
     });
   } catch (error) {
     console.error('Error loading movies:', error);
@@ -231,19 +247,51 @@ app.post('/movies/:id/delete', async (req, res) => {
 // Search movies
 app.get('/search', async (req, res) => {
   try {
+    console.log('[DEBUG] Search query params:', req.query);
     const searchParams = {};
     if (req.query.title) searchParams.primaryTitle = req.query.title;
     if (req.query.year) searchParams.startYear = req.query.year;
     if (req.query.genre) searchParams.genres = req.query.genre;
+    if (req.query.titleType) searchParams.titleType = req.query.titleType;
     
-    const movies = Object.keys(searchParams).length > 0 
-      ? await Movie.getByParameters(searchParams)
-      : [];
+    console.log('[DEBUG] Search params:', searchParams);
+    
+    if (Object.keys(searchParams).length === 0) {
+      // No search parameters, redirect to movies list
+      return res.redirect('/movies');
+    }
+    
+    // Pagination for search results
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20; // Results per page
+    const offset = (page - 1) * limit;
+    
+    const movies = await Movie.getByParameters(searchParams, limit, offset);
+    const totalMovies = await Movie.getCountByParameters(searchParams);
+    const totalPages = Math.ceil(totalMovies / limit);
+    
+    // Build query string for pagination links
+    const queryParams = new URLSearchParams();
+    if (req.query.title) queryParams.append('title', req.query.title);
+    if (req.query.year) queryParams.append('year', req.query.year);
+    if (req.query.genre) queryParams.append('genre', req.query.genre);
+    if (req.query.titleType) queryParams.append('titleType', req.query.titleType);
+    const baseSearchUrl = `/search?${queryParams.toString()}`;
       
     res.render('movies/index', { 
       movies: movies,
       title: 'Search Results',
-      searchQuery: req.query
+      searchQuery: req.query,
+      pagination: totalPages > 1 ? {
+        currentPage: page,
+        totalPages: totalPages,
+        totalMovies: totalMovies,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+        nextPage: page + 1,
+        prevPage: page - 1,
+        baseUrl: baseSearchUrl
+      } : null
     });
   } catch (error) {
     console.error('Error searching movies:', error);
@@ -271,6 +319,50 @@ app.use((err, req, res, next) => {
     error: err,
     title: 'Server Error'
   });
+});
+
+// Reports page
+app.get('/reports', async (req, res) => {
+  try {
+    const reportType = req.query.type || 'genre';
+    let reportData = [];
+    let reportTitle = '';
+    
+    switch (reportType) {
+      case 'genre':
+        reportData = await Movie.getGenreReport();
+        reportTitle = 'Movies by Genre';
+        break;
+      case 'year':
+        reportData = await Movie.getYearReport();
+        reportTitle = 'Movies by Year';
+        break;
+      case 'type':
+        reportData = await Movie.getTypeReport();
+        reportTitle = 'Movies by Type';
+        break;
+      case 'runtime':
+        reportData = await Movie.getRuntimeReport();
+        reportTitle = 'Runtime Analysis';
+        break;
+      default:
+        reportData = await Movie.getGenreReport();
+        reportTitle = 'Movies by Genre';
+    }
+    
+    res.render('reports/index', {
+      title: 'Database Reports',
+      reportTitle: reportTitle,
+      reportType: reportType,
+      reportData: reportData
+    });
+  } catch (error) {
+    console.error('Error loading reports:', error);
+    res.render('error', {
+      error: error,
+      title: 'Error'
+    });
+  }
 });
 
 // 404 handler (last)

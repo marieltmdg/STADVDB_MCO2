@@ -19,15 +19,15 @@ const resolveAllPendingLogs = async () => {
 };
 
 const Movie = {
-  async getAll(limit = 50) {
+  async getAll(limit = 50, offset = 0) {
     try {
       // Try node1 first
-      const [rows] = await pools.node1.query('SELECT * FROM title_basics LIMIT ?', [limit]);
+      const [rows] = await pools.node1.query('SELECT * FROM title_basics LIMIT ? OFFSET ?', [limit, offset]);
       return rows;
     } catch (err) {
       // If node1 is unavailable, fallback to node2 and node3
-      const [rows2] = await pools.node2.query('SELECT * FROM title_basics LIMIT ?', [limit]);
-      const [rows3] = await pools.node3.query('SELECT * FROM title_basics LIMIT ?', [limit]);
+      const [rows2] = await pools.node2.query('SELECT * FROM title_basics LIMIT ? OFFSET ?', [limit, offset]);
+      const [rows3] = await pools.node3.query('SELECT * FROM title_basics LIMIT ? OFFSET ?', [limit, offset]);
       const merged = [...rows2, ...rows3];
       const unique = Object.values(merged.reduce((acc, curr) => {
         acc[curr.id] = curr;
@@ -52,6 +52,25 @@ const Movie = {
         return acc;
       }, {}));
       return unique[0] || null;
+    }
+  },
+
+  async getCount() {
+    try {
+      // Try node1 first (central node has all records)
+      const [rows] = await pools.node1.query('SELECT COUNT(*) as count FROM title_basics');
+      return rows[0].count;
+    } catch (err) {
+      // If node1 is unavailable, estimate from node2 and node3
+      try {
+        const [rows2] = await pools.node2.query('SELECT COUNT(*) as count FROM title_basics');
+        const [rows3] = await pools.node3.query('SELECT COUNT(*) as count FROM title_basics');
+        // Since node2 has even IDs and node3 has odd IDs, sum them for total
+        return rows2[0].count + rows3[0].count;
+      } catch (fallbackErr) {
+        console.error('All nodes unavailable for count:', fallbackErr);
+        return 0;
+      }
     }
   },
 
@@ -279,9 +298,11 @@ const Movie = {
     }
   },
 
-  async getByParameters(params) {
+  async getByParameters(params, limit = null, offset = 0) {
     let query = 'SELECT * FROM title_basics WHERE 1=1';
     const values = [];
+    console.log('[DEBUG] Movie.getByParameters called with params:', params);
+    
     if (params.primaryTitle) {
       query += ' AND primaryTitle LIKE ?';
       values.push(`%${params.primaryTitle}%`);
@@ -294,6 +315,20 @@ const Movie = {
       query += ' AND genres LIKE ?';
       values.push(`%${params.genres}%`);
     }
+    if (params.titleType) {
+      query += ' AND titleType = ?';
+      values.push(params.titleType);
+    }
+    
+    console.log('[DEBUG] Generated query:', query);
+    console.log('[DEBUG] Query values:', values);
+    
+    // Add pagination if limit is specified
+    if (limit) {
+      query += ' LIMIT ? OFFSET ?';
+      values.push(limit, offset);
+    }
+    
     try {
       // Try node1 first
       const [rows] = await pools.node1.query(query, values);
@@ -307,7 +342,134 @@ const Movie = {
         acc[curr.id] = curr;
         return acc;
       }, {}));
-      return unique;
+      return limit ? unique.slice(offset, offset + limit) : unique;
+    }
+  },
+
+  async getCountByParameters(params) {
+    let query = 'SELECT COUNT(*) as count FROM title_basics WHERE 1=1';
+    const values = [];
+    if (params.primaryTitle) {
+      query += ' AND primaryTitle LIKE ?';
+      values.push(`%${params.primaryTitle}%`);
+    }
+    if (params.startYear) {
+      query += ' AND startYear = ?';
+      values.push(params.startYear);
+    }
+    if (params.genres) {
+      query += ' AND genres LIKE ?';
+      values.push(`%${params.genres}%`);
+    }
+    if (params.titleType) {
+      query += ' AND titleType = ?';
+      values.push(params.titleType);
+    }
+    
+    try {
+      // Try node1 first
+      const [rows] = await pools.node1.query(query, values);
+      return rows[0].count;
+    } catch (err) {
+      // If node1 is unavailable, fallback to node2 and node3
+      try {
+        const [rows2] = await pools.node2.query(query, values);
+        const [rows3] = await pools.node3.query(query, values);
+        return rows2[0].count + rows3[0].count;
+      } catch (fallbackErr) {
+        console.error('All nodes unavailable for search count:', fallbackErr);
+        return 0;
+      }
+    }
+  },
+
+  // Reports functionality
+  async getGenreReport() {
+    try {
+      const [rows] = await pools.node1.query(`
+        SELECT 
+          TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(genres, ',', numbers.n), ',', -1)) as genre,
+          COUNT(*) as count
+        FROM title_basics
+        JOIN (
+          SELECT 1 n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
+          UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10
+        ) numbers
+        ON CHAR_LENGTH(genres) - CHAR_LENGTH(REPLACE(genres, ',', '')) >= numbers.n - 1
+        WHERE genres IS NOT NULL AND genres != ''
+        GROUP BY genre
+        ORDER BY count DESC
+        LIMIT 20
+      `);
+      return rows;
+    } catch (err) {
+      console.error('Error generating genre report:', err);
+      return [];
+    }
+  },
+
+  async getYearReport() {
+    try {
+      const [rows] = await pools.node1.query(`
+        SELECT 
+          startYear as year,
+          COUNT(*) as count
+        FROM title_basics 
+        WHERE startYear IS NOT NULL AND startYear BETWEEN 1900 AND 2030
+        GROUP BY startYear
+        ORDER BY startYear DESC
+        LIMIT 50
+      `);
+      return rows;
+    } catch (err) {
+      console.error('Error generating year report:', err);
+      return [];
+    }
+  },
+
+  async getTypeReport() {
+    try {
+      const [rows] = await pools.node1.query(`
+        SELECT 
+          titleType as type,
+          COUNT(*) as count,
+          ROUND(AVG(runtimeMinutes), 1) as avg_runtime
+        FROM title_basics 
+        WHERE titleType IS NOT NULL
+        GROUP BY titleType
+        ORDER BY count DESC
+      `);
+      return rows;
+    } catch (err) {
+      console.error('Error generating type report:', err);
+      return [];
+    }
+  },
+
+  async getRuntimeReport() {
+    try {
+      const [rows] = await pools.node1.query(`
+        SELECT 
+          CASE 
+            WHEN runtimeMinutes < 30 THEN 'Short (< 30 min)'
+            WHEN runtimeMinutes BETWEEN 30 AND 90 THEN 'Standard (30-90 min)'
+            WHEN runtimeMinutes BETWEEN 91 AND 180 THEN 'Long (91-180 min)'
+            WHEN runtimeMinutes > 180 THEN 'Very Long (> 180 min)'
+            ELSE 'Unknown'
+          END as runtime_category,
+          COUNT(*) as count,
+          MIN(runtimeMinutes) as min_runtime,
+          MAX(runtimeMinutes) as max_runtime,
+          ROUND(AVG(runtimeMinutes), 1) as avg_runtime
+        FROM title_basics 
+        WHERE runtimeMinutes IS NOT NULL
+        GROUP BY runtime_category
+        ORDER BY avg_runtime ASC
+      `);
+      return rows;
+    } catch (err) {
+      console.error('Error generating runtime report:', err);
+      return [];
     }
   },
 
