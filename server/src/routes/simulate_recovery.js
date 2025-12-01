@@ -94,29 +94,68 @@ async function runOnNode(node, sql, params = []) {
 }
 
 async function revokeAll(node) {
-  // revoke insert/update/delete (simulate write failures)
+  // simulate failure/crash by revoking all privileges
   await runOnNode(node, "REVOKE  SELECT, INSERT, UPDATE, DELETE ON mco_2.* FROM 'mco2-user'@'%'");
   await runOnNode(node, "FLUSH PRIVILEGES");
   
+  // Kill existing connections to force privilege refresh
+  try {
+    await runOnNode(node, "SELECT CONCAT('KILL ', id, ';') FROM information_schema.processlist WHERE user = 'mco2-user'");
+    const [processes] = await adminPools[node].query(
+      "SELECT id FROM information_schema.processlist WHERE user = 'mco2-user' AND command != 'Sleep'"
+    );
+    for (const proc of processes) {
+      try {
+        await runOnNode(node, `KILL ${proc.id}`);
+      } catch (err) {
+        // Connection might already be gone
+      }
+    }
+  } catch (err) {
+    console.error(`[REVOKE] Error killing connections on ${node}:`, err.message);
+  }
+  
+  // Reset the application pool to force new connections
+  if (pools[node]) {
+    try {
+      await pools[node].end();
+      const nodeNum = node.replace('node', '');
+      const config = {
+        host: process.env[`DB_NODE${nodeNum}_IP`],
+        user: process.env.DB_USER,
+        password: process.env.DB_USER_PASSWORD,
+        database: process.env[`DB${nodeNum === '1' ? '0' : nodeNum === '2' ? '1' : '2'}_NAME`],
+        port: 3306
+      };
+      pools[node] = mysql.createPool(config);
+    } catch (err) {
+      console.error(`[REVOKE] Error resetting pool for ${node}:`, err.message);
+    }
+  }
 }
 
 async function grantAll(node) {
   await runOnNode(node, "GRANT SELECT, INSERT, UPDATE, DELETE ON mco_2.* TO 'mco2-user'@'%'");
   await runOnNode(node, "FLUSH PRIVILEGES");
+  
+  // Reset the application pool to pick up new privileges
+  if (pools[node]) {
+    try {
+      await pools[node].end();
+      const nodeNum = node.replace('node', '');
+      const config = {
+        host: process.env[`DB_NODE${nodeNum}_IP`],
+        user: process.env.DB_USER,
+        password: process.env.DB_USER_PASSWORD,
+        database: process.env[`DB${nodeNum === '1' ? '0' : nodeNum === '2' ? '1' : '2'}_NAME`],
+        port: 3306
+      };
+      pools[node] = mysql.createPool(config);
+    } catch (err) {
+      console.error(`[GRANT] Error resetting pool for ${node}:`, err.message);
+    }
+  }
 }
-
-async function revokeWrites(node) {
-  // Revoke only write privileges to simulate write failures while keeping SELECT/ping available
-  await runOnNode(node, "REVOKE INSERT, UPDATE, DELETE ON mco_2.title_basics FROM 'mco2-user'@'%'");
-  await runOnNode(node, "FLUSH PRIVILEGES");
-}
-
-async function revokeSelect(node) {
-  // Revoke SELECT to make the node appear unreachable to the application (SELECT will fail)
-  await runOnNode(node, "REVOKE SELECT ON mco_2.* FROM 'mco2-user'@'%'");
-  await runOnNode(node, "FLUSH PRIVILEGES");
-}
-
 const SLEEP = 500;
 
 function sleep(ms) {
