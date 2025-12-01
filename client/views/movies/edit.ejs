@@ -1,7 +1,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1>Edit Movie: <%= movie.primaryTitle || 'Untitled' %></h1>
     <div>
-        <a href="/movies/<%= encodeURIComponent(movie.tconst) %>" class="btn btn-info">View</a>
+        <a href="/movies/<%= encodeURIComponent(movie.id) %>" class="btn btn-info">View</a>
         <a href="/movies" class="btn btn-secondary">Back to List</a>
     </div>
 </div>
@@ -19,12 +19,12 @@
                 <h5 class="card-title mb-0">Edit Movie Information</h5>
             </div>
             <div class="card-body">
-                <form method="POST" action="/movies/<%= encodeURIComponent(movie.tconst) %>?_method=PUT">
+                <form method="POST" action="/movies/<%= encodeURIComponent(movie.id) %>">
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label for="tconst" class="form-label">Movie ID (tconst)</label>
-                            <input type="text" class="form-control" id="tconst" name="tconst" 
-                                   value="<%= movie.tconst %>" readonly>
+                            <label for="id" class="form-label">Movie ID</label>
+                            <input type="text" class="form-control" id="id" 
+                                   value="<%= movie.id %>" readonly disabled>
                             <div class="form-text">ID cannot be changed</div>
                         </div>
                         <div class="col-md-6 mb-3">
