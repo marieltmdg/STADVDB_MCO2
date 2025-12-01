@@ -85,70 +85,170 @@ async function revokeWrites(node) {
 }
 
 async function revokeSelect(node) {
-  // Revoke SELECT to make the node appear unreachable to the application (SELECT 1 will fail)
+  // Revoke SELECT to make the node appear unreachable to the application (SELECT will fail)
   await runOnNode(node, "REVOKE SELECT ON mco_2.* FROM 'mco2-user'@'%'");
   await runOnNode(node, "FLUSH PRIVILEGES");
 }
 
-// // Example usage (run with ADMIN env vars set)
-// if (require.main === module) {
-//   (async () => {
-//     try {
-//       await revokeWrites('node2');   // simulate node2 write failure
-//       // await revokeSelect('node1'); // simulate central unreachable
-//       // await grantAll('node2');     // restore node2
-//       console.log('done');
-//     } catch (e) {
-//       console.error(e);
-//     }
-//   })();
+async function captureInitialValues(even, odd) {
+    const ids = [even, odd];
+    const state = { node1: {}, node2: {}, node3: {} };
+    for (const node of ['node1','node2','node3']) {
+        for (const id of ids) {
+            try {
+                const [rows] = await pools[node].query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [id]);
+                state[node][id] = rows[0] || null;
+            } catch (err) {
+                console.error(`[captureInitialValues] ${node} id=${id} ->`, err.message);
+                state[node][id] = null;
+            }
+        }
+    }
+    return state;
+}
 
-
+// Restore snapshot captured with captureInitialValues
+// returns an array of restore results for reporting
+async function restoreInitialValues(snapshot) {
+    const results = [];
+    for (const node of ['node1','node2','node3']) {
+        const pool = pools[node];
+        if (!pool) continue;
+        for (const idStr of Object.keys(snapshot[node] || {})) {
+            const id = Number(idStr);
+            const saved = snapshot[node][id];
+            try {
+                if (saved === null) {
+                    // originally missing -> delete any test rows
+                    const [del] = await pool.query('DELETE FROM title_basics WHERE id = ?', [id]);
+                    results.push({ node, id, action: 'DELETE_IF_EXISTS', affectedRows: del.affectedRows });
+                    continue;
+                }
+                // update existing row to match saved values
+                const params = [
+                    saved.titleType || null,
+                    saved.primaryTitle || null,
+                    saved.originalTitle || null,
+                    saved.isAdult || 0,
+                    saved.startYear || null,
+                    saved.endYear || null,
+                    saved.runtimeMinutes || null,
+                    saved.genres || null,
+                    id
+                ];
+                const [res] = await pool.query(
+                    'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
+                    params
+                );
+                if (res.affectedRows === 0) {
+                    // row missing -> insert using saved values
+                    const insertParams = [
+                        id,
+                        saved.titleType || 'movie',
+                        saved.primaryTitle || '',
+                        saved.originalTitle || '',
+                        saved.isAdult || 0,
+                        saved.startYear || null,
+                        saved.endYear || null,
+                        saved.runtimeMinutes || null,
+                        saved.genres || null
+                    ];
+                    const [ins] = await pool.query(
+                        'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        insertParams
+                    );
+                    results.push({ node, id, action: 'INSERT', insertId: ins.insertId || id });
+                } else results.push({ node, id, action: 'UPDATE', affectedRows: res.affectedRows });
+            } catch (err) {
+                console.error(`[restoreInitialValues] ${node} id=${id} ->`, err.message);
+                results.push({ node, id, action: 'ERROR', message: err.message });
+            }
+        }
+    }
+    return results;
+}
 
 /*
 Case #1: When attempting to replicate the transaction from Node 2 or Node 3 to the central node, 
 the transaction fails in writing (insert / update) to the central node.
 */
-async function runCase1() {
-  // Case 1: Node2/Node3 -> Central write fails (central SELECT revoked)
+async function runCase1(even, odd) {
+  // Case 1: Node2/Node3 -> Central write fails
   const nodeStates = [];
   const replicationLog = [];
 
+
+
   // mark central as unreachable for pings
-  await revokeSelect('node1');
-  nodeStates.push({ nodeId: 'node1', status: 'SELECT_REVOKED', result: null });
+  await revokeAll('node1');
+  
+  nodeStates.push({ nodeId: 'node1', status: 'REVOKED_ALL', result: null });
 
-  // const ids = await getTestMovieIds();
-  const tests = [
-    { src: 'node2', id: 132710 },
-    { src: 'node3', id: 108531 }
-  ];
+  const sources = [
+    {src: "node2", id: even}, 
+    {src: "node3", id: odd}
+  ]
 
-  for (const t of tests) {
-    const [rows] = await pools[t.src].query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [t.id]);
+  for (const s of sources) {
+    const [rows] = await pools[s.src].query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [s.id]);
     const before = rows[0] || null;
     if (!before) {
-      replicationLog.push({ transactionId: `${t.src}-${t.id}`, operation: 'UPDATE', node: t.src, status: 'SKIPPED_NO_ROW' });
+      replicationLog.push({ transactionId: `${s.src}-${s.id}`, operation: 'UPDATE', node: s.src, status: 'SKIPPED_NO_ROW' });
       continue;
     }
 
     const newTitle = (before.primaryTitle || '') + ' - RECOVERY_CASE1';
-    await pools[t.src].query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [newTitle, t.id]);
+    await pools[s.src].query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [newTitle, s.id]);
+
+    // send full row so replication/insert preserves all fields
+    const after = { ...before, primaryTitle: newTitle };
 
     try {
-      await replicateOperation(t.src, null, 'UPDATE', t.id, { primaryTitle: newTitle });
-      replicationLog.push({ transactionId: `${t.src}-${t.id}`, operation: 'UPDATE', node: 'node1', status: 'OK' });
+      await replicateOperation(s.src, null, 'UPDATE', s.id, after);
+      replicationLog.push({ transactionId: `${s.src}-${s.id}`, operation: 'UPDATE', node: 'node1', status: 'OK' });
     } catch (err) {
       // replication failed -> recovery log entry expected
-      replicationLog.push({ transactionId: `${t.src}-${t.id}`, operation: 'UPDATE', node: 'node1', status: 'FAILED', message: err.message });
+      replicationLog.push({ transactionId: `${s.src}-${s.id}`, operation: 'UPDATE', node: 'node1', status: 'FAILED', message: err.message });
     }
 
     // collect pending logs created on source
-    const pending = await RecoveryLog.getPendingLogs(t.src);
-    replicationLog.push({ transactionId: `${t.src}-${t.id}`, operation: 'PENDING_CHECK', node: t.src, status: pending.length ? 'PENDING' : 'NONE', details: pending });
-
+    const pending = await RecoveryLog.getPendingLogs(s.src);
+    replicationLog.push({ transactionId: `${s.src}-${s.id}`, operation: 'PENDING_CHECK', node: s.src, status: pending.length ? 'PENDING' : 'NONE', details: pending });
+    
     // revert change so source DB stays clean
-    await pools[t.src].query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, t.id]);
+    await pools[s.src].query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, s.id]);
+
+    // --- verify node1 didn't get the change; if it did, revert node1 too ---
+    try {
+      const [node1Rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [s.id]);
+      const node1Row = node1Rows[0] || null;
+      if (node1Row && node1Row.primaryTitle === newTitle) {
+        // central has the updated title -> revert to original
+        await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, s.id]);
+        replicationLog.push({
+          transactionId: `node1-revert-${s.src}-${s.id}`,
+          operation: 'REVERT',
+          node: 'node1',
+          status: 'REVERTED',
+          details: { from: newTitle, to: before.primaryTitle }
+        });
+      } else {
+        replicationLog.push({
+          transactionId: `node1-check-${s.src}-${s.id}`,
+          operation: 'VERIFY_NODE1',
+          node: 'node1',
+          status: node1Row ? 'UNCHANGED' : 'MISSING'
+        });
+      }
+    } catch (err) {
+      replicationLog.push({
+        transactionId: `node1-check-error-${s.src}-${s.id}`,
+        operation: 'VERIFY_NODE1',
+        node: 'node1',
+        status: 'ERROR',
+        message: err.message
+      });
+    }
   }
 
   // include source nodes states as normal
@@ -158,7 +258,7 @@ async function runCase1() {
   return { nodeStates, replicationLog };
 }
 
-async function runCase2() {
+async function runCase2(even, odd) {
   // Case 2: Central recovers and missed writes should be applied
   const nodeStates = [];
   const replicationLog = [];
@@ -167,7 +267,6 @@ async function runCase2() {
   await grantAll('node1');
   nodeStates.push({ nodeId: 'node1', status: 'GRANTED', result: null });
 
-  const ids = await getTestMovieIds();
   const sources = ['node2', 'node3'];
 
   for (const src of sources) {
@@ -187,7 +286,7 @@ async function runCase2() {
   }
 
   // show central state content for the sample ids
-  const idsToCheck = [ids.even, ids.odd];
+  const idsToCheck = [even, odd];
   for (const id of idsToCheck) {
     const [rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [id]);
     nodeStates.push({ nodeId: 'node1', status: 'OK', result: rows[0] || null });
@@ -200,42 +299,47 @@ async function runCase2() {
   return { nodeStates, replicationLog };
 }
 
-async function runCase3() {
+async function runCase3(even, odd) {
   // Case 3: Central -> node2/node3 write fails (nodes unreachable)
   const nodeStates = [];
   const replicationLog = [];
 
-  // make both target nodes unreachable (revoke SELECT)
-  await revokeSelect('node2');
-  await revokeSelect('node3');
-  nodeStates.push({ nodeId: 'node2', status: 'SELECT_REVOKED', result: null });
-  nodeStates.push({ nodeId: 'node3', status: 'SELECT_REVOKED', result: null });
+  // make both target nodes unreachable
+  await revokeAll('node2');
+  await revokeAll('node3');
 
-  // pick an id that belongs to central -> use even to attempt replicate to node2
-  const ids = await getTestMovieIds();
-  const useId = ids.even; // deterministic pick
+  nodeStates.push({ nodeId: 'node2', status: 'REVOKED_ALL', result: null });
+  nodeStates.push({ nodeId: 'node3', status: 'REVOKED_ALL', result: null });
 
-  const [rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [useId]);
-  const before = rows[0] || null;
-  if (before) {
-    const newTitle = (before.primaryTitle || '') + ' - RECOVERY_CASE3';
-    await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [newTitle, useId]);
+  // test both even and odd ids on central, targeting node2/node3 respectively
+  const idsToTest = [even, odd];
 
-    try {
-      await replicateOperation('node1', null, 'UPDATE', useId, { primaryTitle: newTitle });
-      replicationLog.push({ transactionId: `node1-${useId}`, operation: 'UPDATE', node: 'node2|node3', status: 'OK' });
-    } catch (err) {
-      replicationLog.push({ transactionId: `node1-${useId}`, operation: 'UPDATE', node: 'node2|node3', status: 'FAILED', message: err.message });
+  for (const id of idsToTest) {
+    const target = (id % 2 === 0) ? 'node2' : 'node3';
+    const [rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [id]);
+    const before = rows[0] || null;
+
+    if (!before) {
+      replicationLog.push({ transactionId: `node1-${id}`, operation: 'UPDATE', node: 'node1', status: 'SKIPPED_NO_ROW' });
+      continue;
     }
 
-    // pending logs should be created on node1
-    const pending1 = await RecoveryLog.getPendingLogs('node1');
-    replicationLog.push({ transactionId: `node1-pending`, operation: 'PENDING_LIST', node: 'node1', status: pending1.length ? 'PENDING' : 'NONE', details: pending1 });
+    const newTitle = (before.primaryTitle || '') + ` - RECOVERY_CASE3`;
+    await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [newTitle, id]);
 
-    // revert central change to keep DB consistent
-    await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, useId]);
-  } else {
-    replicationLog.push({ transactionId: `node1-${useId}`, operation: 'UPDATE', node: 'node1', status: 'SKIPPED_NO_ROW' });
+    // send full row so replication/insert preserves all fields
+    const after = { ...before, primaryTitle: newTitle };  
+
+    try {
+      await replicateOperation('node1', null, 'UPDATE', id, after);
+      replicationLog.push({ transactionId: `node1-${id}`, operation: 'UPDATE', node: target, status: 'OK' });
+    } catch (err) {
+      replicationLog.push({ transactionId: `node1-${id}`, operation: 'UPDATE', node: target, status: 'FAILED', message: err.message });
+    }
+
+    // check pending logs created on central
+    const pending1 = await RecoveryLog.getPendingLogs('node1');
+    replicationLog.push({ transactionId: `node1-${id}-pending`, operation: 'PENDING_LIST', node: 'node1', status: pending1.length ? 'PENDING' : 'NONE', details: pending1 });
   }
 
   // central back to OK for display
@@ -244,7 +348,7 @@ async function runCase3() {
   return { nodeStates, replicationLog };
 }
 
-async function runCase4() {
+async function runCase4(even, odd) {
   // Case 4: node2/node3 recover and missed writes should be applied
   const nodeStates = [];
   const replicationLog = [];
@@ -252,30 +356,63 @@ async function runCase4() {
   // restore permissions on node2 and node3
   await grantAll('node2');
   await grantAll('node3');
+
   nodeStates.push({ nodeId: 'node2', status: 'GRANTED', result: null });
   nodeStates.push({ nodeId: 'node3', status: 'GRANTED', result: null });
 
-  // resolve pending logs from central (node1) so central's pending entries are applied to node2/node3
-  try {
-    const beforePending = await RecoveryLog.getPendingLogs('node1');
-    replicationLog.push({ transactionId: 'node1-before', operation: 'PENDING_LIST', node: 'node1', status: beforePending.length ? 'PENDING' : 'NONE', details: beforePending });
+  // capture pending logs on central BEFORE resolving
+  const beforePending = await RecoveryLog.getPendingLogs('node1');
+  replicationLog.push({
+    transactionId: 'node1-before',
+    operation: 'PENDING_LIST',
+    node: 'node1',
+    status: beforePending.length ? 'PENDING' : 'NONE',
+    details: beforePending
+  });
 
+  // resolve pending logs from central (node1) -> node2/node3
+  try {
     await RecoveryLog.resolvePendingLogs('node1', resolvePendingLog);
     replicationLog.push({ transactionId: 'node1-resolve', operation: 'RESOLVE', node: 'node2|node3', status: 'RESOLVE_ATTEMPTED' });
   } catch (err) {
     replicationLog.push({ transactionId: 'node1-resolve', operation: 'RESOLVE', node: 'node2|node3', status: 'RESOLVE_FAILED', message: err.message });
   }
 
+  // capture pending logs on central AFTER resolving
   const afterPending = await RecoveryLog.getPendingLogs('node1');
-  replicationLog.push({ transactionId: 'node1-after', operation: 'PENDING_LIST', node: 'node1', status: afterPending.length ? 'PENDING' : 'NONE', details: afterPending });
+  replicationLog.push({
+    transactionId: 'node1-after',
+    operation: 'PENDING_LIST',
+    node: 'node1',
+    status: afterPending.length ? 'PENDING' : 'NONE',
+    details: afterPending
+  });
 
-  // optionally show a couple of rows on node2/node3 to confirm they received new data
-  const ids = await getTestMovieIds();
-  const [r2] = await pools.node2.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [ids.even]);
-  const [r3] = await pools.node3.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [ids.odd]);
+  // Verify that node2 has the even id and node3 has the odd id after recovery
+  const evenId = (typeof even !== 'undefined') ? even : (await getTestMovieIds()).even;
+  const oddId = (typeof odd !== 'undefined') ? odd : (await getTestMovieIds()).odd;
+
+  const [r2] = await pools.node2.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [evenId]);
+  const [r3] = await pools.node3.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [oddId]);
 
   nodeStates.push({ nodeId: 'node2', status: 'OK', result: r2[0] || null });
   nodeStates.push({ nodeId: 'node3', status: 'OK', result: r3[0] || null });
+
+  // Add verification entries to replication log
+  replicationLog.push({
+    transactionId: `node2-${evenId}`,
+    operation: 'VERIFY',
+    node: 'node2',
+    status: r2[0] ? 'PRESENT' : 'MISSING',
+    details: r2[0] || null
+  });
+  replicationLog.push({
+    transactionId: `node3-${oddId}`,
+    operation: 'VERIFY',
+    node: 'node3',
+    status: r3[0] ? 'PRESENT' : 'MISSING',
+    details: r3[0] || null
+  });
 
   return { nodeStates, replicationLog };
 }
@@ -283,11 +420,26 @@ async function runCase4() {
 router.get('/simulate/recovery', async (req, res) => {
   const caseNum = Number(req.query.case || req.query.c || 0);
   try {
-    let result;
-    if (caseNum === 1) result = await runCase1();
-    else if (caseNum === 2) result = await runCase2();
-    else if (caseNum === 3) result = await runCase3();
-    else if (caseNum === 4) result = await runCase4();
+    let result;   
+      // Reset grants
+
+    // const {even, odd} = await getTestMovieIds();
+    const even = 132710;
+    const odd = 108531;
+    if (caseNum === 1) {
+      await grantAll('node1');
+      await grantAll('node2');
+      await grantAll('node3');    
+      result = await runCase1(even, odd); 
+    }
+    else if (caseNum === 2) result = await runCase2(even, odd);
+    else if (caseNum === 3) {
+      await grantAll('node1');
+      await grantAll('node2');
+      await grantAll('node3');   
+      result = await runCase3(even, odd);
+    }
+    else if (caseNum === 4) result = await runCase4(even, odd);
     else return res.status(400).json({ error: 'missing or invalid case param (1..4)' });
 
     return res.json({
