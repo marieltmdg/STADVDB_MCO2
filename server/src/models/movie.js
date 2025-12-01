@@ -2,8 +2,21 @@
 require('dotenv').config();
 const mysql = require('mysql2/promise');
 const RecoveryLog = require('./recoveryLog.js');
+const { replicateOperation, resolvePendingLog } = require('../replication');
 const { pools } = require('../dbPools');
 
+
+// Helper to check and resolve pending logs across all nodes
+const resolveAllPendingLogs = async () => {
+  const nodes = ['node1', 'node2', 'node3'];
+  for (const node of nodes) {
+    try {
+      await RecoveryLog.resolvePendingLogs(node, resolvePendingLog);
+    } catch (err) {
+      console.warn(`[MOVIE] Could not resolve pending logs for ${node}:`, err.message);
+    }
+  }
+};
 
 const Movie = {
   async getAll(limit = 50) {
@@ -23,6 +36,7 @@ const Movie = {
       return unique.slice(0, limit);
     }
   },
+
   async getById(id) {
     try {
       // Try node1 first
@@ -39,8 +53,10 @@ const Movie = {
       }, {}));
       return unique[0] || null;
     }
-    },
-  async create(data) {
+  },
+
+  // Creates a new movie - tries node1 first, falls back to node2/node3 if needed
+  async create(poolId, data) {
     const {
       titleType,
       primaryTitle,
@@ -53,63 +69,85 @@ const Movie = {
     } = data;
 
     let id;
-    let transactionId;
+    let logId;
+    let actualPoolId = poolId;
 
     try {
-      // Log the operation before applying
-      transactionId = await RecoveryLog.logOperation('INSERT', null, null, data);
-
       // Try node1 first
-      const [result1] = await pools.node1.query(
-        'INSERT INTO title_basics (titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
-      );
-      id = result1.insertId;
-
-      // Insert into node2 or node3 based on even/odd
-      const targetPool = id % 2 === 0 ? pools.node2 : pools.node3;
       try {
-        await targetPool.query(
-          'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
+        const [result] = await pools.node1.query(
+          'INSERT INTO title_basics (titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
         );
-      } catch (e) {
-        // If node1 is offline, get next autoincrement from node2 (even) or node3 (odd)
-        // Try node2 first (even)
-        const [auto2] = await pools.node2.query("SHOW TABLE STATUS LIKE 'title_basics'");
-        const nextId2 = auto2[0].Auto_increment;
-        // Try node3 (odd)
-        const [auto3] = await pools.node3.query("SHOW TABLE STATUS LIKE 'title_basics'");
-        const nextId3 = auto3[0].Auto_increment;
-        // Pick the lower one to avoid gaps, but ensure even/odd
-        if (nextId2 % 2 === 0) {
-          id = nextId2;
-          await pools.node2.query(
+        id = result.insertId;
+        actualPoolId = 'node1';
+        console.log(`[MOVIE] Created record id=${id} on node1`);
+
+      } catch (node1Err) {
+        console.warn(`[MOVIE] Node1 unavailable for INSERT, delegating to node2/node3:`, node1Err.message);
+        
+        // Node1 is down, delegate to node2 or node3
+        // Try to get next auto_increment from both nodes and pick appropriate one
+        let targetPool;
+        let targetPoolId;
+        
+        try {
+          const [auto2] = await pools.node2.query("SHOW TABLE STATUS LIKE 'title_basics'");
+          const nextId2 = auto2[0].Auto_increment;
+          
+          const [auto3] = await pools.node3.query("SHOW TABLE STATUS LIKE 'title_basics'");
+          const nextId3 = auto3[0].Auto_increment;
+          
+          // Pick the node with lower auto_increment to avoid gaps
+          if (nextId2 <= nextId3) {
+            id = nextId2;
+            targetPool = pools.node2;
+            targetPoolId = 'node2';
+          } else {
+            id = nextId3;
+            targetPool = pools.node3;
+            targetPoolId = 'node3';
+          }
+          
+          // Insert with explicit ID
+          await targetPool.query(
             'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
           );
-        } else {
-          id = nextId3;
-          await pools.node3.query(
-            'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres]
-          );
+          
+          actualPoolId = targetPoolId;
+          console.log(`[MOVIE] Created record id=${id} on ${targetPoolId} (node1 unavailable)`);
+          
+        } catch (delegateErr) {
+          console.error(`[MOVIE] Failed to delegate INSERT to node2/node3:`, delegateErr.message);
+          throw new Error('All database nodes unavailable for INSERT operation');
         }
-        // Optionally, try to insert into both if possible
       }
 
-      // Update recovery log as applied locally
-      await RecoveryLog.updateLocalStatus(transactionId, 'APPLIED', { id, ...data });
-      return { id, ...data };
+      const recordData = { id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres };
+
+      // Replicate to appropriate node
+      try {
+        await replicateOperation(actualPoolId, null, 'INSERT', id, recordData, null);
+        console.log(`[MOVIE] Replication succeeded for INSERT id=${id}`);
+      } catch (replicationErr) {
+        console.warn(`[MOVIE] Replication failed for INSERT id=${id}, logged for recovery`);
+        // Recovery log is automatically created by replicateOperation when it fails
+      }
+
+      // Check and resolve any pending logs across all nodes
+      await resolveAllPendingLogs();
+
+      return recordData;
 
     } catch (err) {
-      console.error('Create operation failed:', err.message);
-      if (transactionId) await RecoveryLog.updateReplicationStatus(transactionId, 'FAILED');
+      console.error('[MOVIE] Create operation failed:', err.message);
       throw err;
     }
   },
 
-  async update(id, data) {
+  // Updates a movie - same priority as create (node1 first, then fallback)
+  async update(poolId, id, data) {
     const {
       titleType,
       primaryTitle,
@@ -121,73 +159,125 @@ const Movie = {
       genres
     } = data;
 
-    let transactionId;
+    let logId;
+    let actualPoolId = poolId;
 
     try {
-      // Get current state
+      // Get current state before update
       const before = await this.getById(id);
+      if (!before) {
+        throw new Error(`Movie with id=${id} not found`);
+      }
 
-      // Log the operation
-      transactionId = await RecoveryLog.logOperation('UPDATE', id, before, data);
-
-      // Update node1
-      await pools.node1.query(
-        'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
-        [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres, id]
-      );
-
-      // Update secondary node
-      const targetPool = id % 2 === 0 ? pools.node2 : pools.node3;
+      // Try node1 first
       try {
-        await targetPool.query(
+        await pools.node1.query(
           'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
           [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres, id]
         );
-      } catch (e) {
-        console.warn(`Replication update failed for id=${id}`);
+        actualPoolId = 'node1';
+        console.log(`[MOVIE] Updated record id=${id} on node1`);
+
+      } catch (node1Err) {
+        console.warn(`[MOVIE] Node1 unavailable for UPDATE, delegating to node2/node3:`, node1Err.message);
+        
+        // Node1 is down, delegate to node2 (even) or node3 (odd)
+        const isEven = parseInt(id) % 2 === 0;
+        const targetPoolId = isEven ? 'node2' : 'node3';
+        const targetPool = pools[targetPoolId];
+        
+        try {
+          await targetPool.query(
+            'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
+            [titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres, id]
+          );
+          actualPoolId = targetPoolId;
+          console.log(`[MOVIE] Updated record id=${id} on ${targetPoolId} (node1 unavailable)`);
+          
+        } catch (delegateErr) {
+          console.error(`[MOVIE] Failed to delegate UPDATE to ${targetPoolId}:`, delegateErr.message);
+          throw new Error(`Database node ${targetPoolId} unavailable for UPDATE operation`);
+        }
       }
 
-      await RecoveryLog.updateLocalStatus(transactionId, 'APPLIED', data);
-      return { id, ...data };
+      const recordData = { titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres };
+
+      // Replicate to appropriate node
+      try {
+        await replicateOperation(actualPoolId, null, 'UPDATE', id, recordData, before);
+        console.log(`[MOVIE] Replication succeeded for UPDATE id=${id}`);
+      } catch (replicationErr) {
+        console.warn(`[MOVIE] Replication failed for UPDATE id=${id}, logged for recovery`);
+        // Recovery log is automatically created by replicateOperation when it fails
+      }
+
+      // Check and resolve any pending logs across all nodes
+      await resolveAllPendingLogs();
+
+      return { id, ...recordData };
 
     } catch (err) {
-      console.error('Update operation failed:', err.message);
-      if (transactionId) await RecoveryLog.updateReplicationStatus(transactionId, 'FAILED');
+      console.error('[MOVIE] Update operation failed:', err.message);
       throw err;
     }
   },
 
-  async delete(id) {
-    let transactionId;
+  // Deletes a movie - you guessed it, node1 first with fallback
+  async delete(poolId, id) {
+    let logId;
+    let actualPoolId = poolId;
 
     try {
       // Get current state before deletion
       const before = await this.getById(id);
-
-      // Log delete operation
-      transactionId = await RecoveryLog.logOperation('DELETE', id, before, null);
-
-      // Delete from node1
-      await pools.node1.query('DELETE FROM title_basics WHERE id = ?', [id]);
-
-      // Delete from secondary node
-      const targetPool = id % 2 === 0 ? pools.node2 : pools.node3;
-      try {
-        await targetPool.query('DELETE FROM title_basics WHERE id = ?', [id]);
-      } catch (e) {
-        console.warn(`Replication delete failed for id=${id}`);
+      if (!before) {
+        throw new Error(`Movie with id=${id} not found`);
       }
 
-      await RecoveryLog.updateLocalStatus(transactionId, 'APPLIED');
+      // Try node1 first
+      try {
+        await pools.node1.query('DELETE FROM title_basics WHERE id = ?', [id]);
+        actualPoolId = 'node1';
+        console.log(`[MOVIE] Deleted record id=${id} from node1`);
+
+      } catch (node1Err) {
+        console.warn(`[MOVIE] Node1 unavailable for DELETE, delegating to node2/node3:`, node1Err.message);
+        
+        // Node1 is down, delegate to node2 (even) or node3 (odd)
+        const isEven = parseInt(id) % 2 === 0;
+        const targetPoolId = isEven ? 'node2' : 'node3';
+        const targetPool = pools[targetPoolId];
+        
+        try {
+          await targetPool.query('DELETE FROM title_basics WHERE id = ?', [id]);
+          actualPoolId = targetPoolId;
+          console.log(`[MOVIE] Deleted record id=${id} from ${targetPoolId} (node1 unavailable)`);
+          
+        } catch (delegateErr) {
+          console.error(`[MOVIE] Failed to delegate DELETE to ${targetPoolId}:`, delegateErr.message);
+          throw new Error(`Database node ${targetPoolId} unavailable for DELETE operation`);
+        }
+      }
+
+      // Replicate to appropriate node
+      try {
+        await replicateOperation(actualPoolId, null, 'DELETE', id, before, before);
+        console.log(`[MOVIE] Replication succeeded for DELETE id=${id}`);
+      } catch (replicationErr) {
+        console.warn(`[MOVIE] Replication failed for DELETE id=${id}, logged for recovery`);
+        // Recovery log is automatically created by replicateOperation when it fails
+      }
+
+      // Check and resolve any pending logs across all nodes
+      await resolveAllPendingLogs();
+
       return { id };
 
     } catch (err) {
-      console.error('Delete operation failed:', err.message);
-      if (transactionId) await RecoveryLog.updateReplicationStatus(transactionId, 'FAILED');
+      console.error('[MOVIE] Delete operation failed:', err.message);
       throw err;
     }
   },
-
 
   async getByParameters(params) {
     let query = 'SELECT * FROM title_basics WHERE 1=1';
@@ -220,6 +310,7 @@ const Movie = {
       return unique;
     }
   },
+
   async cleanup() {
     await Promise.all([
       pools.node1.end(),

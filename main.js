@@ -1,18 +1,6 @@
-const { replicateToNodes } = require('./server/src/replication');
+const { resolvePendingLog } = require('./server/src/replication');
+const RecoveryLog = require('./server/src/models/recoveryLog');
 // Fragmentation middleware
-function fragmentationCheck(req, res, next) {
-  const nodeId = process.env.NODE_ID;
-  let id = req.body.id || req.params.id;
-  if (!id) return next();
-  const isEven = parseInt(id) % 2 === 0;
-  if (nodeId === 'node2' && !isEven) {
-    return res.status(403).send('Node 2 only allows even-numbered id.');
-  }
-  if (nodeId === 'node3' && isEven) {
-    return res.status(403).send('Node 3 only allows odd-numbered id.');
-  }
-  next();
-}
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
@@ -106,11 +94,11 @@ app.get('/movies/new', (req, res) => {
 });
 
 // Individual movie page
-app.get('/movies/:id', fragmentationCheck, async (req, res) => {
+app.get('/movies/:id', async (req, res) => {
   const txId = Date.now() + Math.random();
   const id = req.params.id;
   // Debug: show which node is accessed
-  console.log(`[DEBUG] Node ${process.env.NODE_ID} accessed for read: id=${id}`);
+  console.log(`[DEBUG] Node node1 accessed for read: id=${id}`);
   // Acquire read lock
   if (!acquireLock(id, 'read', txId)) {
     return res.status(423).send('Resource is locked. Try again later.');
@@ -137,7 +125,7 @@ app.get('/movies/:id', fragmentationCheck, async (req, res) => {
 });
 
 // Create movie
-app.post('/movies', fragmentationCheck, async (req, res) => {
+app.post('/movies', async (req, res) => {
   const txId = Date.now() + Math.random();
   // Acquire write lock (no id yet, so skip lock)
   try {
@@ -151,11 +139,9 @@ app.post('/movies', fragmentationCheck, async (req, res) => {
       runtimeMinutes: req.body.runtimeMinutes ? parseInt(req.body.runtimeMinutes) : null,
       genres: req.body.genres
     };
-
-    const nodeName = process.env.NODE_ID || 'node1';
-    const created = await Movie.create(nodeName, movieData);
-    // Replicate to other nodes
-    replicateToNodes('create', created.id, created);
+    const poolId = process.env.NODE_ID || 'node1';
+    const created = await Movie.create(poolId, movieData);
+    
     res.redirect('/movies?message=Movie created successfully');
   } catch (error) {
     console.error('Error creating movie:', error);
@@ -186,7 +172,7 @@ app.get('/movies/:id/edit', async (req, res) => {
   }
 });
 
-app.post('/movies/:id', fragmentationCheck, async (req, res) => {
+app.post('/movies/:id', async (req, res) => {
   const txId = Date.now() + Math.random();
   const id = req.params.id;
 
@@ -207,10 +193,10 @@ app.post('/movies/:id', fragmentationCheck, async (req, res) => {
       genres: req.body.genres
     };
 
-    // Pass the current node as nodeName
-    const nodeName = process.env.NODE_ID || 'node1';
-    await Movie.update(nodeName, id, updateData);
-    replicateToNodes('update', id, updateData);
+    // Pass the current node as poolId
+    const poolId = process.env.NODE_ID || 'node1';
+    await Movie.update(poolId, id, updateData);
+    
     res.redirect(`/movies/${id}?message=Movie updated successfully`);
   } catch (error) {
     console.error('Error updating movie:', error);
@@ -220,7 +206,7 @@ app.post('/movies/:id', fragmentationCheck, async (req, res) => {
   }
 });
 
-app.post('/movies/:id/delete', fragmentationCheck, async (req, res) => {
+app.post('/movies/:id/delete', async (req, res) => {
   const txId = Date.now() + Math.random();
   const id = req.params.id;
 
@@ -230,9 +216,9 @@ app.post('/movies/:id/delete', fragmentationCheck, async (req, res) => {
   }
 
   try {
-    const nodeName = process.env.NODE_ID || 'node1';
-    await Movie.delete(nodeName, id);
-    replicateToNodes('delete', id);
+    const poolId = process.env.NODE_ID || 'node1';
+    await Movie.delete(poolId, id);
+    
     res.redirect('/movies?message=Movie deleted successfully');
   } catch (error) {
     console.error('Error deleting movie:', error);
