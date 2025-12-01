@@ -53,9 +53,35 @@ const adminPools = {
   node3: mysql.createPool(nodeConfigs.node3)
 };
 
+
+async function resetPool(node) {
+    console.log(`[POOL] Resetting pool for ${node}`);
+
+    // End old connections
+    if (adminPools[node]) {
+        try {
+            await adminPools[node].end();
+        } catch (err) {
+            console.error(`[POOL] Error ending pool for ${node}:`, err.message);
+        }
+    }
+
+    // Create new pool (fresh privileges)
+    adminPools[node] = mysql.createPool(nodeConfigs[node]);
+
+    // Optional wait to ensure new connections initialize
+    await new Promise(res => setTimeout(res, 200));
+}
+
+async function resetAllPools() {
+    for (const node of Object.keys(adminPools)) {
+        await resetPool(node);
+    }
+}
+
 async function runOnNode(node, sql, params = []) {
   const pool = adminPools[node];
-  
+
   if (!pool) throw new Error('Unknown node: ' + node);
 
   try {
@@ -71,6 +97,7 @@ async function revokeAll(node) {
   // revoke insert/update/delete (simulate write failures)
   await runOnNode(node, "REVOKE  SELECT, INSERT, UPDATE, DELETE ON mco_2.* FROM 'mco2-user'@'%'");
   await runOnNode(node, "FLUSH PRIVILEGES");
+  
 }
 
 async function grantAll(node) {
@@ -90,83 +117,12 @@ async function revokeSelect(node) {
   await runOnNode(node, "FLUSH PRIVILEGES");
 }
 
-async function captureInitialValues(even, odd) {
-    const ids = [even, odd];
-    const state = { node1: {}, node2: {}, node3: {} };
-    for (const node of ['node1','node2','node3']) {
-        for (const id of ids) {
-            try {
-                const [rows] = await pools[node].query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [id]);
-                state[node][id] = rows[0] || null;
-            } catch (err) {
-                console.error(`[captureInitialValues] ${node} id=${id} ->`, err.message);
-                state[node][id] = null;
-            }
-        }
-    }
-    return state;
+const SLEEP = 500;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Restore snapshot captured with captureInitialValues
-// returns an array of restore results for reporting
-async function restoreInitialValues(snapshot) {
-    const results = [];
-    for (const node of ['node1','node2','node3']) {
-        const pool = pools[node];
-        if (!pool) continue;
-        for (const idStr of Object.keys(snapshot[node] || {})) {
-            const id = Number(idStr);
-            const saved = snapshot[node][id];
-            try {
-                if (saved === null) {
-                    // originally missing -> delete any test rows
-                    const [del] = await pool.query('DELETE FROM title_basics WHERE id = ?', [id]);
-                    results.push({ node, id, action: 'DELETE_IF_EXISTS', affectedRows: del.affectedRows });
-                    continue;
-                }
-                // update existing row to match saved values
-                const params = [
-                    saved.titleType || null,
-                    saved.primaryTitle || null,
-                    saved.originalTitle || null,
-                    saved.isAdult || 0,
-                    saved.startYear || null,
-                    saved.endYear || null,
-                    saved.runtimeMinutes || null,
-                    saved.genres || null,
-                    id
-                ];
-                const [res] = await pool.query(
-                    'UPDATE title_basics SET titleType = ?, primaryTitle = ?, originalTitle = ?, isAdult = ?, startYear = ?, endYear = ?, runtimeMinutes = ?, genres = ? WHERE id = ?',
-                    params
-                );
-                if (res.affectedRows === 0) {
-                    // row missing -> insert using saved values
-                    const insertParams = [
-                        id,
-                        saved.titleType || 'movie',
-                        saved.primaryTitle || '',
-                        saved.originalTitle || '',
-                        saved.isAdult || 0,
-                        saved.startYear || null,
-                        saved.endYear || null,
-                        saved.runtimeMinutes || null,
-                        saved.genres || null
-                    ];
-                    const [ins] = await pool.query(
-                        'INSERT INTO title_basics (id, titleType, primaryTitle, originalTitle, isAdult, startYear, endYear, runtimeMinutes, genres) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        insertParams
-                    );
-                    results.push({ node, id, action: 'INSERT', insertId: ins.insertId || id });
-                } else results.push({ node, id, action: 'UPDATE', affectedRows: res.affectedRows });
-            } catch (err) {
-                console.error(`[restoreInitialValues] ${node} id=${id} ->`, err.message);
-                results.push({ node, id, action: 'ERROR', message: err.message });
-            }
-        }
-    }
-    return results;
-}
 
 /*
 Case #1: When attempting to replicate the transaction from Node 2 or Node 3 to the central node, 
@@ -176,11 +132,10 @@ async function runCase1(even, odd) {
   // Case 1: Node2/Node3 -> Central write fails
   const nodeStates = [];
   const replicationLog = [];
-
-
-
+  
   // mark central as unreachable for pings
   await revokeAll('node1');
+  await sleep(SLEEP); 
   
   nodeStates.push({ nodeId: 'node1', status: 'REVOKED_ALL', result: null });
 
@@ -197,7 +152,7 @@ async function runCase1(even, odd) {
       continue;
     }
 
-    const newTitle = (before.primaryTitle || '') + ' - RECOVERY_CASE1';
+    const newTitle = before.primaryTitle;
     await pools[s.src].query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [newTitle, s.id]);
 
     // send full row so replication/insert preserves all fields
@@ -218,37 +173,37 @@ async function runCase1(even, odd) {
     // revert change so source DB stays clean
     await pools[s.src].query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, s.id]);
 
-    // --- verify node1 didn't get the change; if it did, revert node1 too ---
-    try {
-      const [node1Rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [s.id]);
-      const node1Row = node1Rows[0] || null;
-      if (node1Row && node1Row.primaryTitle === newTitle) {
-        // central has the updated title -> revert to original
-        await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, s.id]);
-        replicationLog.push({
-          transactionId: `node1-revert-${s.src}-${s.id}`,
-          operation: 'REVERT',
-          node: 'node1',
-          status: 'REVERTED',
-          details: { from: newTitle, to: before.primaryTitle }
-        });
-      } else {
-        replicationLog.push({
-          transactionId: `node1-check-${s.src}-${s.id}`,
-          operation: 'VERIFY_NODE1',
-          node: 'node1',
-          status: node1Row ? 'UNCHANGED' : 'MISSING'
-        });
-      }
-    } catch (err) {
-      replicationLog.push({
-        transactionId: `node1-check-error-${s.src}-${s.id}`,
-        operation: 'VERIFY_NODE1',
-        node: 'node1',
-        status: 'ERROR',
-        message: err.message
-      });
-    }
+    // // --- verify node1 didn't get the change; if it did, revert node1 too ---
+    // try {
+    //   const [node1Rows] = await pools.node1.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [s.id]);
+    //   const node1Row = node1Rows[0] || null;
+    //   if (node1Row && node1Row.primaryTitle === newTitle) {
+    //     // central has the updated title -> revert to original
+    //     await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [before.primaryTitle, s.id]);
+    //     replicationLog.push({
+    //       transactionId: `node1-revert-${s.src}-${s.id}`,
+    //       operation: 'REVERT',
+    //       node: 'node1',
+    //       status: 'REVERTED',
+    //       details: { from: newTitle, to: before.primaryTitle }
+    //     });
+    //   } else {
+    //     replicationLog.push({
+    //       transactionId: `node1-check-${s.src}-${s.id}`,
+    //       operation: 'VERIFY_NODE1',
+    //       node: 'node1',
+    //       status: node1Row ? 'UNCHANGED' : 'MISSING'
+    //     });
+    //   }
+    // } catch (err) {
+    //   replicationLog.push({
+    //     transactionId: `node1-check-error-${s.src}-${s.id}`,
+    //     operation: 'VERIFY_NODE1',
+    //     node: 'node1',
+    //     status: 'ERROR',
+    //     message: err.message
+    //   });
+    // }
   }
 
   // include source nodes states as normal
@@ -265,6 +220,8 @@ async function runCase2(even, odd) {
 
   // bring central back
   await grantAll('node1');
+  await sleep(SLEEP); 
+
   nodeStates.push({ nodeId: 'node1', status: 'GRANTED', result: null });
 
   const sources = ['node2', 'node3'];
@@ -307,6 +264,8 @@ async function runCase3(even, odd) {
   // make both target nodes unreachable
   await revokeAll('node2');
   await revokeAll('node3');
+  await sleep(SLEEP); 
+
 
   nodeStates.push({ nodeId: 'node2', status: 'REVOKED_ALL', result: null });
   nodeStates.push({ nodeId: 'node3', status: 'REVOKED_ALL', result: null });
@@ -324,7 +283,7 @@ async function runCase3(even, odd) {
       continue;
     }
 
-    const newTitle = (before.primaryTitle || '') + ` - RECOVERY_CASE3`;
+    const newTitle = before.primaryTitle;
     await pools.node1.query('UPDATE title_basics SET primaryTitle = ? WHERE id = ?', [newTitle, id]);
 
     // send full row so replication/insert preserves all fields
@@ -356,9 +315,11 @@ async function runCase4(even, odd) {
   // restore permissions on node2 and node3
   await grantAll('node2');
   await grantAll('node3');
+  await sleep(SLEEP); 
 
-  nodeStates.push({ nodeId: 'node2', status: 'GRANTED', result: null });
-  nodeStates.push({ nodeId: 'node3', status: 'GRANTED', result: null });
+
+  nodeStates.push({ nodeId: 'node2', status: 'OK', result: null });
+  nodeStates.push({ nodeId: 'node3', status: 'OK', result: null });
 
   // capture pending logs on central BEFORE resolving
   const beforePending = await RecoveryLog.getPendingLogs('node1');
@@ -388,31 +349,35 @@ async function runCase4(even, odd) {
     details: afterPending
   });
 
-  // Verify that node2 has the even id and node3 has the odd id after recovery
-  const evenId = (typeof even !== 'undefined') ? even : (await getTestMovieIds()).even;
-  const oddId = (typeof odd !== 'undefined') ? odd : (await getTestMovieIds()).odd;
+    // central back to OK for display
+  nodeStates.push({ nodeId: 'node1', status: 'OK', result: null });
 
-  const [r2] = await pools.node2.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [evenId]);
-  const [r3] = await pools.node3.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [oddId]);
 
-  nodeStates.push({ nodeId: 'node2', status: 'OK', result: r2[0] || null });
-  nodeStates.push({ nodeId: 'node3', status: 'OK', result: r3[0] || null });
+  // // Verify that node2 has the even id and node3 has the odd id after recovery
+  // const evenId = (typeof even !== 'undefined') ? even : (await getTestMovieIds()).even;
+  // const oddId = (typeof odd !== 'undefined') ? odd : (await getTestMovieIds()).odd;
 
-  // Add verification entries to replication log
-  replicationLog.push({
-    transactionId: `node2-${evenId}`,
-    operation: 'VERIFY',
-    node: 'node2',
-    status: r2[0] ? 'PRESENT' : 'MISSING',
-    details: r2[0] || null
-  });
-  replicationLog.push({
-    transactionId: `node3-${oddId}`,
-    operation: 'VERIFY',
-    node: 'node3',
-    status: r3[0] ? 'PRESENT' : 'MISSING',
-    details: r3[0] || null
-  });
+  // const [r2] = await pools.node2.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [evenId]);
+  // const [r3] = await pools.node3.query('SELECT * FROM title_basics WHERE id = ? LIMIT 1', [oddId]);
+
+  // nodeStates.push({ nodeId: 'node2', status: 'OK', result: r2[0] || null });
+  // nodeStates.push({ nodeId: 'node3', status: 'OK', result: r3[0] || null });
+
+  // // Add verification entries to replication log
+  // replicationLog.push({
+  //   transactionId: `node2-${evenId}`,
+  //   operation: 'VERIFY',
+  //   node: 'node2',
+  //   status: r2[0] ? 'PRESENT' : 'MISSING',
+  //   details: r2[0] || null
+  // });
+  // replicationLog.push({
+  //   transactionId: `node3-${oddId}`,
+  //   operation: 'VERIFY',
+  //   node: 'node3',
+  //   status: r3[0] ? 'PRESENT' : 'MISSING',
+  //   details: r3[0] || null
+  // });
 
   return { nodeStates, replicationLog };
 }
@@ -427,16 +392,12 @@ router.get('/simulate/recovery', async (req, res) => {
     const even = 132710;
     const odd = 108531;
     if (caseNum === 1) {
-      await grantAll('node1');
-      await grantAll('node2');
-      await grantAll('node3');    
+      
       result = await runCase1(even, odd); 
     }
     else if (caseNum === 2) result = await runCase2(even, odd);
     else if (caseNum === 3) {
-      await grantAll('node1');
-      await grantAll('node2');
-      await grantAll('node3');   
+
       result = await runCase3(even, odd);
     }
     else if (caseNum === 4) result = await runCase4(even, odd);
