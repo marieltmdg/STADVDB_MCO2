@@ -131,8 +131,25 @@
                     <hr>
                     <p class="small text-muted">
                         <strong>Total Records:</strong> <%= reportData.length %><br>
-                        <strong>Generated:</strong> <%= new Date().toLocaleString() %>
+                        <strong>Generated:</strong> <span id="report-generated-local">Loading…</span>
                     </p>
+                    <script>
+                        (function() {
+                            try {
+                                const el = document.getElementById('report-generated-local');
+                                if (el) {
+                                    const now = new Date();
+                                    const formatted = new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'medium' }).format(now);
+                                    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                                    el.textContent = `${formatted} (${tz})`;
+                                }
+                            } catch (e) {
+                                // Fallback to plain locale string
+                                const el = document.getElementById('report-generated-local');
+                                if (el) el.textContent = new Date().toLocaleString();
+                            }
+                        })();
+                    </script>
                 <% } %>
             </div>
         </div>
