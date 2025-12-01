@@ -2,8 +2,6 @@
 const { pools } = require('./dbPools');
 const RecoveryLog = require('./models/recoveryLog');
 
-// Does the actual replication write to the target node
-// No recovery logs are created here - that happens at a higher level
 const replicateToNode = async (sourcePoolId, targetPoolId, logId, opType, id, data) => {
   const targetPool = pools[targetPoolId];
   
@@ -16,11 +14,7 @@ const replicateToNode = async (sourcePoolId, targetPoolId, logId, opType, id, da
   }
 
   try {
-    // Ping the target node to check if it's reachable
-    console.log(`[REPLICATION] Pinging ${targetPoolId}...`);
     await targetPool.query('SELECT 1');
-    console.log(`[REPLICATION] ${targetPoolId} is reachable`);
-
     console.log(`[REPLICATION] Starting ${opType} for id=${id} from ${sourcePoolId} to ${targetPoolId}`);
 
     if (opType === 'INSERT') {
@@ -63,7 +57,6 @@ const replicateToNode = async (sourcePoolId, targetPoolId, logId, opType, id, da
 
     console.log(`[REPLICATION] Successfully replicated ${opType} for id=${id} to ${targetPoolId}`);
     
-    // Update recovery log to DONE on success (only if logId exists)
     if (logId) {
       await RecoveryLog.updateReplicationStatus(sourcePoolId, logId, 'DONE');
     }
@@ -71,7 +64,6 @@ const replicateToNode = async (sourcePoolId, targetPoolId, logId, opType, id, da
   } catch (err) {
     console.error(`[REPLICATION] Failed to replicate to ${targetPoolId}:`, err.message);
     
-    // Update recovery log to PENDING (only if logId exists)
     if (logId) {
       await RecoveryLog.updateReplicationStatus(sourcePoolId, logId, 'PENDING');
     }
@@ -79,9 +71,6 @@ const replicateToNode = async (sourcePoolId, targetPoolId, logId, opType, id, da
   }
 };
 
-// Figures out where to replicate based on the source pool and ID
-// node1 writes go to node2 (even IDs) or node3 (odd IDs)
-// node2/node3 writes go back to node1
 const replicateOperation = async (sourcePoolId, logId, opType, id, data, beforeData = null) => {
   try {
     console.log(`[REPLICATION] replicateOperation called with opType=${opType}, id=${id}, sourcePoolId=${sourcePoolId}`);
@@ -89,12 +78,9 @@ const replicateOperation = async (sourcePoolId, logId, opType, id, data, beforeD
     const isEven = parseInt(id) % 2 === 0;
     let targetPoolId;
 
-    // Determine target based on source
     if (sourcePoolId === 'node1') {
-      // node1 replicates to node2 (even) or node3 (odd)
       targetPoolId = isEven ? 'node2' : 'node3';
     } else if (sourcePoolId === 'node2' || sourcePoolId === 'node3') {
-      // node2 and node3 replicate to node1
       targetPoolId = 'node1';
     } else {
       throw new Error(`Invalid source pool: ${sourcePoolId}`);

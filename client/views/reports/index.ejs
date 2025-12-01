@@ -1,0 +1,157 @@
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><%= reportTitle %></h1>
+    <a href="/movies" class="btn btn-secondary">Back to List</a>
+</div>
+
+<!-- Report Type Selector -->
+<div class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Select Report Type</h5>
+        <div class="btn-group" role="group" aria-label="Report types">
+            <a href="/reports?type=genre" class="btn <%= reportType === 'genre' ? 'btn-primary' : 'btn-outline-primary' %>">
+                Movies by Genre
+            </a>
+            <a href="/reports?type=year" class="btn <%= reportType === 'year' ? 'btn-primary' : 'btn-outline-primary' %>">
+                Movies by Year
+            </a>
+            <a href="/reports?type=type" class="btn <%= reportType === 'type' ? 'btn-primary' : 'btn-outline-primary' %>">
+                Movies by Type
+            </a>
+            <a href="/reports?type=runtime" class="btn <%= reportType === 'runtime' ? 'btn-primary' : 'btn-outline-primary' %>">
+                Runtime Analysis
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Report Data -->
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0"><%= reportTitle %></h5>
+            </div>
+            <div class="card-body">
+                <% if (reportData && reportData.length > 0) { %>
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <% if (reportType === 'genre') { %>
+                                        <th>Genre</th>
+                                        <th>Movie Count</th>
+                                    <% } else if (reportType === 'year') { %>
+                                        <th>Year</th>
+                                        <th>Movie Count</th>
+                                    <% } else if (reportType === 'type') { %>
+                                        <th>Title Type</th>
+                                        <th>Count</th>
+                                        <th>Avg Runtime (min)</th>
+                                    <% } else if (reportType === 'runtime') { %>
+                                        <th>Runtime Category</th>
+                                        <th>Count</th>
+                                        <th>Min Runtime</th>
+                                        <th>Max Runtime</th>
+                                        <th>Avg Runtime</th>
+                                    <% } %>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <% reportData.forEach(row => { %>
+                                    <tr>
+                                        <% if (reportType === 'genre') { %>
+                                            <td><span class="badge bg-info"><%= row.genre %></span></td>
+                                            <td><strong><%= row.count %></strong></td>
+                                        <% } else if (reportType === 'year') { %>
+                                            <td><strong><%= row.year %></strong></td>
+                                            <td><%= row.count %></td>
+                                        <% } else if (reportType === 'type') { %>
+                                            <td><span class="badge bg-secondary"><%= row.type %></span></td>
+                                            <td><%= row.count %></td>
+                                            <td><%= row.avg_runtime ? row.avg_runtime + ' min' : 'N/A' %></td>
+                                        <% } else if (reportType === 'runtime') { %>
+                                            <td><%= row.runtime_category %></td>
+                                            <td><%= row.count %></td>
+                                            <td><%= row.min_runtime %> min</td>
+                                            <td><%= row.max_runtime %> min</td>
+                                            <td><%= row.avg_runtime %> min</td>
+                                        <% } %>
+                                    </tr>
+                                <% }) %>
+                            </tbody>
+                        </table>
+                    </div>
+                <% } else { %>
+                    <div class="alert alert-info">
+                        <h4 class="alert-heading">No data available</h4>
+                        <p>There is no data available for this report. This might be because:</p>
+                        <ul>
+                            <li>The database is empty</li>
+                            <li>The central node (Node 1) is unavailable</li>
+                            <li>There's an issue with the database connection</li>
+                        </ul>
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Report Information</h5>
+            </div>
+            <div class="card-body">
+                <% if (reportType === 'genre') { %>
+                    <h6>About Genre Report:</h6>
+                    <p class="small">Shows the distribution of movies across different genres. Genres are split from comma-separated lists, so movies with multiple genres are counted in each category.</p>
+                    <p class="small"><strong>Data Source:</strong> Central Node (Node 1)</p>
+                <% } else if (reportType === 'year') { %>
+                    <h6>About Year Report:</h6>
+                    <p class="small">Shows the number of movies released each year, filtered to years between 1900 and 2030. Only shows the most recent 50 years.</p>
+                    <p class="small"><strong>Data Source:</strong> Central Node (Node 1)</p>
+                <% } else if (reportType === 'type') { %>
+                    <h6>About Type Report:</h6>
+                    <p class="small">Shows the distribution of different title types (movies, TV series, documentaries, etc.) along with average runtime for each type.</p>
+                    <p class="small"><strong>Data Source:</strong> Central Node (Node 1)</p>
+                <% } else if (reportType === 'runtime') { %>
+                    <h6>About Runtime Analysis:</h6>
+                    <p class="small">Categorizes movies by runtime duration and shows statistics for each category. Helps identify patterns in movie lengths.</p>
+                    <p class="small"><strong>Categories:</strong></p>
+                    <ul class="small">
+                        <li>Short: Less than 30 minutes</li>
+                        <li>Standard: 30-90 minutes</li>
+                        <li>Long: 91-180 minutes</li>
+                        <li>Very Long: More than 180 minutes</li>
+                    </ul>
+                    <p class="small"><strong>Data Source:</strong> Central Node (Node 1)</p>
+                <% } %>
+                
+                <% if (reportData && reportData.length > 0) { %>
+                    <hr>
+                    <p class="small text-muted">
+                        <strong>Total Records:</strong> <%= reportData.length %><br>
+                        <strong>Generated:</strong> <span id="report-generated-local">Loading…</span>
+                    </p>
+                    <script>
+                        (function() {
+                            try {
+                                const el = document.getElementById('report-generated-local');
+                                if (el) {
+                                    const now = new Date();
+                                    const formatted = new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'medium' }).format(now);
+                                    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                                    el.textContent = `${formatted} (${tz})`;
+                                }
+                            } catch (e) {
+                                // Fallback to plain locale string
+                                const el = document.getElementById('report-generated-local');
+                                if (el) el.textContent = new Date().toLocaleString();
+                            }
+                        })();
+                    </script>
+                <% } %>
+            </div>
+        </div>
+    </div>
+</div>

@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const Movie = require('../models/movie');
 
-// GET all movies
 router.get('/', async (req, res) => {
   try {
     const movies = await Movie.getAll();
@@ -12,7 +11,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET movie by ID
 router.get('/:id', async (req, res) => {
   try {
     const movie = await Movie.getById(req.params.id);
@@ -23,7 +21,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// CREATE new movie
 router.post('/', async (req, res) => {
   try {
     const poolId = process.env.NODE_ID || 'node1';
@@ -34,7 +31,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// UPDATE movie
 router.put('/:id', async (req, res) => {
   try {
     const poolId = process.env.NODE_ID || 'node1';
@@ -45,7 +41,6 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE movie
 router.delete('/:id', async (req, res) => {
   try {
     const poolId = process.env.NODE_ID || 'node1';

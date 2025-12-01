@@ -60,7 +60,7 @@
                             <label for="endYear" class="form-label">End Year</label>
                             <input type="number" class="form-control" id="endYear" name="endYear" 
                                    value="<%= typeof formData !== 'undefined' ? formData.endYear || '' : '' %>"
-                                   min="1880" max="2030" placeholder="For TV series">
+                                   min="1880" max="2030" placeholder="For TV series/TV Mini Series" disabled>
                         </div>
                         <div class="col-md-4 mb-3">
                             <label for="runtimeMinutes" class="form-label">Runtime (minutes)</label>
@@ -112,3 +112,33 @@
         </div>
     </div>
 </div>
+
+<script>
+// Handle title type change to enable/disable end year field
+document.getElementById('titleType').addEventListener('change', function() {
+    const endYearField = document.getElementById('endYear');
+    const selectedType = this.value;
+    
+    if (selectedType === 'tvSeries' || selectedType === 'tvMiniSeries') {
+        endYearField.disabled = false;
+        endYearField.placeholder = 'End year for series';
+    } else {
+        endYearField.disabled = true;
+        endYearField.value = '';
+        endYearField.placeholder = 'For TV series/TV Mini Series';
+    }
+});
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const titleTypeField = document.getElementById('titleType');
+    const endYearField = document.getElementById('endYear');
+    
+    // Check initial state
+    const currentType = titleTypeField.value;
+    if (currentType !== 'tvSeries' && currentType !== 'tvMiniSeries') {
+        endYearField.disabled = true;
+        endYearField.value = '';
+    }
+});
+</script>
