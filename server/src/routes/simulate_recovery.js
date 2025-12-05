@@ -74,13 +74,13 @@ async function resetPool(node) {
 }
 
 async function resetAllPools() {
-    for (const node of Object.keys(pools)) {
+    for (const node of Object.keys(adminPools)) {
         await resetPool(node);
     }
 }
 
 async function runOnNode(node, sql, params = []) {
-  const pool = pools[node];
+  const pool = adminPools[node];;
 
   if (!pool) throw new Error('Unknown node: ' + node);
 
